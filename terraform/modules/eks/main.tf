@@ -352,7 +352,7 @@ resource "aws_eks_node_group" "main" {
 resource "aws_eks_addon" "addons" {
   for_each = {
     coredns            = "v1.11.4-eksbuild.2"
-    kube-proxy         = "v1.32.3-eksbuild.2"
+    kube-proxy         = "v1.30.9-eksbuild.3"
     vpc-cni            = "v1.19.5-eksbuild.1"
     aws-ebs-csi-driver = "v1.44.0-eksbuild.1"
   }
