@@ -44,11 +44,11 @@ ingress:
 # Resource limits — always set in production
 resources:
   requests:
-    cpu: "50m"
-    memory: "64Mi"
+    cpu: "25m"
+    memory: "48Mi"
   limits:
-    cpu: "200m"
-    memory: "256Mi"
+    cpu: "100m"
+    memory: "128Mi"
 
 # Horizontal Pod Autoscaler
 autoscaling:
@@ -106,7 +106,7 @@ podAnnotations:
 env:
   APP_VERSION: "1.0.0"
   ENV: "production"
-  OTLP_ENDPOINT: "http://tempo-distributor.monitoring.svc.cluster.local:4317"
+  OTLP_ENDPOINT: "http://tempo.monitoring.svc.cluster.local:4317"
 
 # Topology spread — spread pods across nodes
 topologySpreadConstraints:
