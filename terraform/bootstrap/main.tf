@@ -158,8 +158,17 @@ resource "aws_iam_policy" "github_deploy" {
           "ecr:PutImage",
           "ecr:DescribeRepositories",
           "ecr:CreateRepository",
+          "ecr:DeleteRepository",
           "ecr:PutLifecyclePolicy",
+          "ecr:GetLifecyclePolicy",
+          "ecr:DeleteLifecyclePolicy",
           "ecr:TagResource",
+          "ecr:UntagResource",
+          "ecr:ListTagsForResource",
+          "ecr:GetRepositoryPolicy",
+          "ecr:SetRepositoryPolicy",
+          "ecr:PutImageScanningConfiguration",
+          "ecr:PutImageTagMutability",
         ]
         Resource = "*"
       },
