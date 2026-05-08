@@ -126,13 +126,16 @@ module "cluster_autoscaler" {
 }
 
 # ── ECR Repository ────────────────────────────────────────────────────────────
+import {
+  to = aws_ecr_repository.hello_world
+  id = "hello-world"
+}
+
 resource "aws_ecr_repository" "hello_world" {
   name                 = "hello-world"
   image_tag_mutability = "IMMUTABLE"
-  image_scanning_configuration { scan_on_push = true }
-  encryption_configuration {
-    encryption_type = "KMS"
-    kms_key         = module.eks.kms_key_arn
+  image_scanning_configuration {
+    scan_on_push = true
   }
   tags = local.common_tags
 }
