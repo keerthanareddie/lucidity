@@ -115,103 +115,14 @@ module "irsa_hello_world" {
 }
 
 # ── Cluster Autoscaler ────────────────────────────────────────────────────────
-resource "aws_iam_policy" "cluster_autoscaler" {
-  name        = "${local.cluster_name}-cluster-autoscaler"
-  description = "Cluster Autoscaler — describe and modify ASGs for ${local.cluster_name}"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "ReadASGs"
-        Effect = "Allow"
-        Action = [
-          "autoscaling:DescribeAutoScalingGroups",
-          "autoscaling:DescribeAutoScalingInstances",
-          "autoscaling:DescribeLaunchConfigurations",
-          "autoscaling:DescribeScalingActivities",
-          "autoscaling:DescribeTags",
-          "ec2:DescribeLaunchTemplateVersions",
-          "ec2:DescribeInstanceTypes",
-          "ec2:DescribeImages",
-          "ec2:GetInstanceTypesFromInstanceRequirements",
-          "eks:DescribeNodegroup",
-        ]
-        Resource = ["*"]
-      },
-      {
-        Sid    = "ModifyTaggedASGs"
-        Effect = "Allow"
-        Action = [
-          "autoscaling:SetDesiredCapacity",
-          "autoscaling:TerminateInstanceInAutoScalingGroup",
-        ]
-        Resource = ["*"]
-        Condition = {
-          StringEquals = {
-            "autoscaling:ResourceTag/k8s.io/cluster-autoscaler/enabled"               = "true"
-            "autoscaling:ResourceTag/k8s.io/cluster-autoscaler/${local.cluster_name}" = "owned"
-          }
-        }
-      }
-    ]
-  })
-  tags = local.common_tags
-}
-
-module "irsa_cluster_autoscaler" {
-  source               = "../../modules/irsa"
-  cluster_name         = local.cluster_name
-  oidc_provider_arn    = module.eks.oidc_provider_arn
-  oidc_provider_url    = module.eks.oidc_provider_url
-  namespace            = "kube-system"
-  service_account_name = "cluster-autoscaler"
-  policy_arns          = [aws_iam_policy.cluster_autoscaler.arn]
-  tags                 = local.common_tags
-  depends_on           = [module.eks]
-}
-
-resource "helm_release" "cluster_autoscaler" {
-  name       = "cluster-autoscaler"
-  repository = "https://kubernetes.github.io/autoscaler"
-  chart      = "cluster-autoscaler"
-  version    = "9.36.0"
-  namespace  = "kube-system"
-  atomic     = true
-  wait       = true
-  timeout    = 300
-
-  values = [<<-EOF
-    autoDiscovery:
-      clusterName: ${local.cluster_name}
-    awsRegion: ${var.aws_region}
-    rbac:
-      serviceAccount:
-        name: cluster-autoscaler
-        annotations:
-          eks.amazonaws.com/role-arn: ${module.irsa_cluster_autoscaler.role_arn}
-    extraArgs:
-      balance-similar-node-groups: "true"
-      skip-nodes-with-system-pods: "false"
-      scale-down-delay-after-add: 5m
-      scale-down-unneeded-time: 5m
-      scale-down-utilization-threshold: "0.5"
-      max-node-provision-time: 15m
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-      limits:
-        cpu: 200m
-        memory: 256Mi
-    podAnnotations:
-      prometheus.io/scrape: "true"
-      prometheus.io/port: "8085"
-      prometheus.io/path: "/metrics"
-    priorityClassName: system-cluster-critical
-  EOF
-  ]
-
-  depends_on = [module.eks, module.irsa_cluster_autoscaler]
+module "cluster_autoscaler" {
+  source            = "../../modules/cluster-autoscaler"
+  cluster_name      = local.cluster_name
+  aws_region        = var.aws_region
+  oidc_provider_arn = module.eks.oidc_provider_arn
+  oidc_provider_url = module.eks.oidc_provider_url
+  tags              = local.common_tags
+  depends_on        = [module.eks]
 }
 
 # ── ECR Repository ────────────────────────────────────────────────────────────
@@ -428,7 +339,7 @@ resource "null_resource" "apply_manifests" {
     module.external_secrets,
     helm_release.cert_manager,
     helm_release.prometheus_stack,
-    helm_release.cluster_autoscaler,
+    module.cluster_autoscaler,
   ]
 }
 
@@ -437,7 +348,7 @@ output "cluster_name"                    { value = module.eks.cluster_name }
 output "cluster_endpoint"               { value = module.eks.cluster_endpoint }
 output "ecr_repository_url"             { value = aws_ecr_repository.hello_world.repository_url }
 output "hello_world_irsa_role_arn"      { value = module.irsa_hello_world.role_arn }
-output "cluster_autoscaler_role_arn"    { value = module.irsa_cluster_autoscaler.role_arn }
+output "cluster_autoscaler_role_arn"    { value = module.cluster_autoscaler.role_arn }
 output "get_kubeconfig_command"         { value = "aws eks update-kubeconfig --name ${local.cluster_name} --region ${var.aws_region}" }
 output "get_grafana_password"           { value = "aws secretsmanager get-secret-value --secret-id hello-world/prod/grafana --query SecretString --output text | python3 -m json.tool" }
 output "get_nlb_hostname"               { value = "kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'" }

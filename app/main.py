@@ -52,8 +52,8 @@ app = FastAPI(
 FastAPIInstrumentor.instrument_app(app)
 
 APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
-ENV         = os.getenv("ENV", "production")
-START_TIME  = time.time()
+ENV = os.getenv("ENV", "production")
+START_TIME = time.time()
 
 
 @app.get("/")
