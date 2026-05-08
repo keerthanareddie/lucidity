@@ -2,6 +2,7 @@
 Production-grade Hello World microservice.
 Exposes /health, /ready, /metrics and GET / returning Hello World.
 """
+
 import logging
 import os
 import time

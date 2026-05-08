@@ -215,8 +215,8 @@ resource "aws_eks_cluster" "main" {
   vpc_config {
     subnet_ids              = var.private_subnet_ids
     security_group_ids      = [aws_security_group.cluster.id]
-    endpoint_private_access = true    # reachable within VPC
-    endpoint_public_access  = false   # NOT reachable from internet
+    endpoint_private_access = true
+    endpoint_public_access  = true    # required for CI runners; restrict with public_access_cidrs in prod
   }
 
   enabled_cluster_log_types = [
