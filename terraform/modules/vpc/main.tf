@@ -122,23 +122,39 @@ resource "aws_network_acl" "public" {
 
   # Inbound
   ingress {
-    rule_no    = 100; protocol = "tcp"; action = "allow"
-    cidr_block = "0.0.0.0/0"; from_port = 443; to_port = 443
+    rule_no    = 100
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 443
+    to_port    = 443
   }
   ingress {
-    rule_no    = 110; protocol = "tcp"; action = "allow"
-    cidr_block = "0.0.0.0/0"; from_port = 80; to_port = 80
+    rule_no    = 110
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 80
+    to_port    = 80
   }
   ingress {
     # Ephemeral return traffic (stateless NACL requirement)
-    rule_no    = 120; protocol = "tcp"; action = "allow"
-    cidr_block = "0.0.0.0/0"; from_port = 1024; to_port = 65535
+    rule_no    = 120
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 1024
+    to_port    = 65535
   }
 
   # Outbound — allow all (EKS nodes pull images, etc.)
   egress {
-    rule_no    = 100; protocol = "-1"; action = "allow"
-    cidr_block = "0.0.0.0/0"; from_port = 0; to_port = 0
+    rule_no    = 100
+    protocol   = "-1"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
   }
 
   tags = merge(var.tags, { Name = "${var.name}-public-nacl" })
@@ -151,19 +167,31 @@ resource "aws_network_acl" "private" {
 
   # Inbound from VPC CIDR only
   ingress {
-    rule_no    = 100; protocol = "tcp"; action = "allow"
-    cidr_block = var.vpc_cidr; from_port = 0; to_port = 65535
+    rule_no    = 100
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = var.vpc_cidr
+    from_port  = 0
+    to_port    = 65535
   }
   # Ephemeral return traffic from internet (for outbound calls via NAT)
   ingress {
-    rule_no    = 110; protocol = "tcp"; action = "allow"
-    cidr_block = "0.0.0.0/0"; from_port = 1024; to_port = 65535
+    rule_no    = 110
+    protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 1024
+    to_port    = 65535
   }
 
   # Outbound — allow all (NAT handles external restrictions)
   egress {
-    rule_no    = 100; protocol = "-1"; action = "allow"
-    cidr_block = "0.0.0.0/0"; from_port = 0; to_port = 0
+    rule_no    = 100
+    protocol   = "-1"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 0
+    to_port    = 0
   }
 
   tags = merge(var.tags, { Name = "${var.name}-private-nacl" })
