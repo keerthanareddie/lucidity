@@ -1,0 +1,71 @@
+repos:
+  # ── General file hygiene ─────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: [--branch, main]
+
+  # ── Python ───────────────────────────────────────────────────────────────────
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        language_version: python3.12
+        files: ^app/
+
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.1.0
+    hooks:
+      - id: flake8
+        files: ^app/
+        args: [--max-line-length=100, --extend-ignore=E203]
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        files: ^app/
+        args: [--profile=black]
+
+  # ── Terraform ─────────────────────────────────────────────────────────────────
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.92.1
+    hooks:
+      - id: terraform_fmt
+
+  # ── YAML linting ─────────────────────────────────────────────────────────────
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args:
+          - -d
+          - |
+            extends: default
+            rules:
+              line-length:
+                max: 160
+              truthy:
+                allowed-values: ["true", "false"]
+              comments:
+                min-spaces-from-content: 1
+        exclude: ^helm/
+
+  # ── Secret detection ──────────────────────────────────────────────────────────
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
+        exclude: (terraform\.tfstate|\.terraform\.lock\.hcl|package-lock\.json)
