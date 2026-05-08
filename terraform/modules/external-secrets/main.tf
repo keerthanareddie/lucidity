@@ -14,9 +14,8 @@
 
 terraform {
   required_providers {
-    aws        = { source = "hashicorp/aws",        version = "~> 5.0" }
-    helm       = { source = "hashicorp/helm",        version = "~> 2.0" }
-    kubernetes = { source = "hashicorp/kubernetes",  version = "~> 2.0" }
+    aws  = { source = "hashicorp/aws",  version = "~> 5.0" }
+    helm = { source = "hashicorp/helm", version = "~> 2.0" }
   }
 }
 
@@ -105,32 +104,5 @@ resource "helm_release" "external_secrets" {
   }
 }
 
-# ── ClusterSecretStore → AWS Secrets Manager ──────────────────────────────────
-# Cluster-wide store — all namespaces can reference it
-resource "kubernetes_manifest" "cluster_secret_store" {
-  depends_on = [helm_release.external_secrets]
-
-  manifest = {
-    apiVersion = "external-secrets.io/v1beta1"
-    kind       = "ClusterSecretStore"
-    metadata = {
-      name = "aws-secrets-manager"
-    }
-    spec = {
-      provider = {
-        aws = {
-          service = "SecretsManager"
-          region  = var.aws_region
-          auth = {
-            jwt = {
-              serviceAccountRef = {
-                name      = local.sa_name
-                namespace = local.namespace
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
+# ClusterSecretStore is applied via kubectl in null_resource.apply_manifests
+# after the cluster and ESO CRDs are ready (monitoring/external-secrets.yaml)

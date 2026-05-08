@@ -32,9 +32,9 @@ resource "aws_iam_role" "irsa" {
 
 # Attach caller-supplied policies (e.g. ECR read, Secrets Manager)
 resource "aws_iam_role_policy_attachment" "irsa" {
-  for_each   = toset(var.policy_arns)
+  count      = length(var.policy_arns)
   role       = aws_iam_role.irsa.name
-  policy_arn = each.value
+  policy_arn = var.policy_arns[count.index]
 }
 
 # Inline policy for fine-grained ECR access (pull only — not push)
