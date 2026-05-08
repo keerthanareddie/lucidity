@@ -13,7 +13,7 @@ terraform {
   backend "s3" {
     bucket         = "hello-world-eks-tfstate-prod"
     key            = "prod/terraform.tfstate"
-    region         = "us-east-1"
+    region         = "ap-south-1"
     dynamodb_table = "hello-world-eks-tfstate-lock"
     encrypt        = true
   }
@@ -141,12 +141,28 @@ resource "aws_ecr_lifecycle_policy" "hello_world" {
   repository = aws_ecr_repository.hello_world.name
   policy = jsonencode({
     rules = [
-      { rulePriority = 1; description = "Remove untagged after 1 day"
-        selection = { tagStatus = "untagged"; countType = "sinceImagePushed"; countUnit = "days"; countNumber = 1 }
-        action = { type = "expire" } },
-      { rulePriority = 2; description = "Keep last 10 tagged"
-        selection = { tagStatus = "tagged"; tagPrefixList = ["v"]; countType = "imageCountMoreThan"; countNumber = 10 }
-        action = { type = "expire" } }
+      {
+        rulePriority = 1
+        description  = "Remove untagged after 1 day"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 1
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep last 10 tagged"
+        selection = {
+          tagStatus      = "tagged"
+          tagPrefixList  = ["v"]
+          countType      = "imageCountMoreThan"
+          countNumber    = 10
+        }
+        action = { type = "expire" }
+      }
     ]
   })
 }
@@ -168,18 +184,31 @@ resource "kubernetes_namespace" "namespaces" {
 
 # ── cert-manager ──────────────────────────────────────────────────────────────
 resource "helm_release" "cert_manager" {
-  name       = "cert-manager"; repository = "https://charts.jetstack.io"
-  chart      = "cert-manager"; version = "v1.14.5"
-  namespace  = "cert-manager"; atomic = true; wait = true; timeout = 300
-  set { name = "installCRDs"; value = "true" }
+  name       = "cert-manager"
+  repository = "https://charts.jetstack.io"
+  chart      = "cert-manager"
+  version    = "v1.14.5"
+  namespace  = "cert-manager"
+  atomic     = true
+  wait       = true
+  timeout    = 300
+  set {
+    name  = "installCRDs"
+    value = "true"
+  }
   depends_on = [kubernetes_namespace.namespaces]
 }
 
 # ── NGINX Ingress ─────────────────────────────────────────────────────────────
 resource "helm_release" "ingress_nginx" {
-  name       = "ingress-nginx"; repository = "https://kubernetes.github.io/ingress-nginx"
-  chart      = "ingress-nginx"; version = "4.10.1"
-  namespace  = "ingress-nginx"; atomic = true; wait = true; timeout = 300
+  name       = "ingress-nginx"
+  repository = "https://kubernetes.github.io/ingress-nginx"
+  chart      = "ingress-nginx"
+  version    = "4.10.1"
+  namespace  = "ingress-nginx"
+  atomic     = true
+  wait       = true
+  timeout    = 300
   values = [<<-EOF
     controller:
       service:
@@ -199,9 +228,14 @@ resource "helm_release" "ingress_nginx" {
 # Grafana reads password from K8s secret — synced by ESO from Secrets Manager
 # NO plaintext credentials anywhere in Terraform or GitHub
 resource "helm_release" "prometheus_stack" {
-  name       = "prometheus"; repository = "https://prometheus-community.github.io/helm-charts"
-  chart      = "kube-prometheus-stack"; version = "58.2.2"
-  namespace  = "monitoring"; atomic = true; wait = true; timeout = 600
+  name       = "prometheus"
+  repository = "https://prometheus-community.github.io/helm-charts"
+  chart      = "kube-prometheus-stack"
+  version    = "58.2.2"
+  namespace  = "monitoring"
+  atomic     = true
+  wait       = true
+  timeout    = 600
   values = [<<-EOF
     grafana:
       admin:
@@ -287,19 +321,35 @@ resource "helm_release" "prometheus_stack" {
 
 # ── Loki ──────────────────────────────────────────────────────────────────────
 resource "helm_release" "loki" {
-  name       = "loki"; repository = "https://grafana.github.io/helm-charts"
-  chart      = "loki-stack"; version = "2.10.2"
-  namespace  = "monitoring"; atomic = true; wait = true; timeout = 300
-  set { name = "grafana.enabled"; value = "false" }
-  set { name = "promtail.enabled"; value = "true" }
+  name       = "loki"
+  repository = "https://grafana.github.io/helm-charts"
+  chart      = "loki-stack"
+  version    = "2.10.2"
+  namespace  = "monitoring"
+  atomic     = true
+  wait       = true
+  timeout    = 300
+  set {
+    name  = "grafana.enabled"
+    value = "false"
+  }
+  set {
+    name  = "promtail.enabled"
+    value = "true"
+  }
   depends_on = [kubernetes_namespace.namespaces]
 }
 
 # ── Tempo ─────────────────────────────────────────────────────────────────────
 resource "helm_release" "tempo" {
-  name       = "tempo"; repository = "https://grafana.github.io/helm-charts"
-  chart      = "tempo"; version = "1.7.2"
-  namespace  = "monitoring"; atomic = true; wait = true; timeout = 300
+  name       = "tempo"
+  repository = "https://grafana.github.io/helm-charts"
+  chart      = "tempo"
+  version    = "1.7.2"
+  namespace  = "monitoring"
+  atomic     = true
+  wait       = true
+  timeout    = 300
   depends_on = [kubernetes_namespace.namespaces]
 }
 
