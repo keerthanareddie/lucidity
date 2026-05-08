@@ -239,6 +239,7 @@ resource "aws_iam_policy" "github_deploy" {
         Effect = "Allow"
         Action = [
           "iam:CreateServiceLinkedRole",
+          "iam:UpdateAssumeRolePolicy",
           "iam:CreateRole",
           "iam:DeleteRole",
           "iam:GetRole",
@@ -325,11 +326,21 @@ resource "aws_iam_policy" "github_deploy" {
         Resource = "*"
       },
       {
-        Sid    = "SecretsManagerRead"
+        Sid    = "SecretsManager"
         Effect = "Allow"
         Action = [
-          "secretsmanager:GetSecretValue",
+          "secretsmanager:CreateSecret",
+          "secretsmanager:DeleteSecret",
           "secretsmanager:DescribeSecret",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:ListSecretVersionIds",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:RestoreSecret",
+          "secretsmanager:TagResource",
+          "secretsmanager:UntagResource",
+          "secretsmanager:UpdateSecret",
+          "secretsmanager:GetResourcePolicy",
+          "secretsmanager:PutResourcePolicy",
         ]
         Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.project}/*"
       },
@@ -342,6 +353,8 @@ resource "aws_iam_policy" "github_deploy" {
           "autoscaling:DescribeLaunchConfigurations",
           "autoscaling:DescribeScalingActivities",
           "autoscaling:DescribeTags",
+          "ec2:DescribeLaunchTemplates",
+          "ec2:DescribeLaunchTemplateVersions",
         ]
         Resource = "*"
       },

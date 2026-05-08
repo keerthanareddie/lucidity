@@ -125,6 +125,58 @@ module "cluster_autoscaler" {
   depends_on        = [module.eks]
 }
 
+# ── Secrets Manager ──────────────────────────────────────────────────────────
+# Placeholders created here so ESO can sync on first apply.
+# Real values must be updated manually via AWS console or CLI after creation —
+# never commit real credentials to git.
+resource "aws_secretsmanager_secret" "grafana" {
+  name                    = "${var.project}/prod/grafana"
+  description             = "Grafana admin credentials"
+  recovery_window_in_days = 7
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "grafana" {
+  secret_id = aws_secretsmanager_secret.grafana.id
+  secret_string = jsonencode({
+    admin-user     = "admin"
+    admin-password = "ChangeMe123!"   # rotate immediately after first deploy
+  })
+  lifecycle {
+    ignore_changes = [secret_string]  # prevent Terraform overwriting manual rotations
+  }
+}
+
+resource "aws_secretsmanager_secret" "letsencrypt" {
+  name                    = "${var.project}/prod/letsencrypt"
+  description             = "Let's Encrypt ACME account email"
+  recovery_window_in_days = 7
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "letsencrypt" {
+  secret_id     = aws_secretsmanager_secret.letsencrypt.id
+  secret_string = jsonencode({ email = "pagasaikeerthanareddy@gmail.com" })
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+resource "aws_secretsmanager_secret" "app" {
+  name                    = "${var.project}/prod/app"
+  description             = "Hello World app secrets"
+  recovery_window_in_days = 7
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "app" {
+  secret_id     = aws_secretsmanager_secret.app.id
+  secret_string = jsonencode({ secret-key = "replace-with-real-secret" })
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
 # ── ECR Repository ────────────────────────────────────────────────────────────
 import {
   to = aws_ecr_repository.hello_world
@@ -157,12 +209,11 @@ resource "aws_ecr_lifecycle_policy" "hello_world" {
       },
       {
         rulePriority = 2
-        description  = "Keep last 10 tagged"
+        description  = "Keep last 10 tagged images"
         selection = {
-          tagStatus      = "tagged"
-          tagPrefixList  = ["v"]
-          countType      = "imageCountMoreThan"
-          countNumber    = 10
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 10
         }
         action = { type = "expire" }
       }
@@ -319,7 +370,7 @@ resource "helm_release" "prometheus_stack" {
             equal: ["namespace", "alertname"]
   EOF
   ]
-  depends_on = [kubernetes_namespace.namespaces, module.external_secrets]
+  depends_on = [kubernetes_namespace.namespaces, null_resource.apply_external_secrets]
 }
 
 # ── Loki ──────────────────────────────────────────────────────────────────────
@@ -356,8 +407,11 @@ resource "helm_release" "tempo" {
   depends_on = [kubernetes_namespace.namespaces]
 }
 
-# ── Apply ExternalSecrets and ClusterIssuer ───────────────────────────────────
-resource "null_resource" "apply_manifests" {
+# ── Step 1: Apply ClusterSecretStore + ExternalSecrets BEFORE Grafana ─────────
+# Grafana needs grafana-admin-credentials secret to exist at deploy time.
+# ESO must be installed first (module.external_secrets), then we create the
+# ClusterSecretStore and ExternalSecrets so secrets sync before prometheus_stack.
+resource "null_resource" "apply_external_secrets" {
   triggers = { cluster = module.eks.cluster_name }
   provisioner "local-exec" {
     command = <<-EOF
@@ -365,34 +419,44 @@ resource "null_resource" "apply_manifests" {
 
       # Wait for ESO CRDs to be ready
       kubectl wait --for=condition=established crd/externalsecrets.external-secrets.io --timeout=120s
+      kubectl wait --for=condition=established crd/clustersecretstores.external-secrets.io --timeout=120s
 
-      # ExternalSecrets — pull Grafana password, Let's Encrypt email, app secrets
+      # Apply ClusterSecretStore + ExternalSecrets
       kubectl apply -f ${path.module}/../../../monitoring/external-secrets.yaml
 
-      # Wait for secrets to sync before applying issuers that need the email
-      sleep 15
-      LETSENCRYPT_EMAIL=$(aws secretsmanager get-secret-value \
-        --secret-id hello-world/prod/letsencrypt \
-        --query SecretString --output text \
-        | python3 -c "import sys,json; print(json.load(sys.stdin)['email'])" 2>/dev/null || echo "admin@example.com")
-      sed "s/REPLACE_WITH_YOUR_EMAIL/$${LETSENCRYPT_EMAIL}/g" \
-        ${path.module}/../../../monitoring/dns-and-certs.yaml | kubectl apply -f -
+      # Wait up to 60s for grafana-admin-credentials secret to sync
+      kubectl wait secret/grafana-admin-credentials -n monitoring --for=jsonpath='{.metadata.name}'=grafana-admin-credentials --timeout=60s || true
+    EOF
+  }
+  depends_on = [module.external_secrets, kubernetes_namespace.namespaces]
+}
+
+# ── Step 2: Post-monitoring manifests — dashboards, alerts, cert issuers ──────
+resource "null_resource" "apply_manifests" {
+  triggers = { cluster = module.eks.cluster_name }
+  provisioner "local-exec" {
+    command = <<-EOF
+      aws eks update-kubeconfig --name ${local.cluster_name} --region ${var.aws_region}
+
+      # Get Let's Encrypt email from Secrets Manager (fallback to placeholder)
+      LETSENCRYPT_EMAIL=$(aws secretsmanager get-secret-value --secret-id hello-world/prod/letsencrypt --query SecretString --output text 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['email'])" 2>/dev/null || echo "admin@example.com")
+      sed "s/REPLACE_WITH_YOUR_EMAIL/$${LETSENCRYPT_EMAIL}/g" ${path.module}/../../../monitoring/dns-and-certs.yaml | kubectl apply -f -
 
       # Prometheus ServiceMonitor + SLO alerts + recording rules
       kubectl apply -f ${path.module}/../../../monitoring/prometheus/servicemonitor.yaml
       kubectl apply -f ${path.module}/../../../monitoring/prometheus/recording-rules.yaml
 
-      # Grafana dashboards (service, SLO, K8s cluster)
+      # Grafana dashboards
       kubectl apply -f ${path.module}/../../../monitoring/prometheus/grafana-dashboard.yaml
       kubectl apply -f ${path.module}/../../../monitoring/grafana/slo-dashboard.yaml
       kubectl apply -f ${path.module}/../../../monitoring/grafana/kubernetes-cluster-dashboard.yaml
     EOF
   }
   depends_on = [
-    module.external_secrets,
     helm_release.cert_manager,
     helm_release.prometheus_stack,
     module.cluster_autoscaler,
+    null_resource.apply_external_secrets,
   ]
 }
 
