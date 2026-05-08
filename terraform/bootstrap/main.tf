@@ -228,6 +228,7 @@ resource "aws_iam_policy" "github_deploy" {
         Sid    = "IAMForTerraform"
         Effect = "Allow"
         Action = [
+          "iam:CreateServiceLinkedRole",
           "iam:CreateRole",
           "iam:DeleteRole",
           "iam:GetRole",
