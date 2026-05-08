@@ -1,57 +1,268 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: hello-world-dashboard
+  name: hello-world-service-dashboard
   namespace: monitoring
   labels:
-    grafana_dashboard: "1"    # Grafana sidecar picks this up automatically
+    grafana_dashboard: "1"
 data:
-  hello-world.json: |
+  hello-world-service.json: |
     {
-      "title": "Hello World Service",
+      "title": "Hello World — Service",
       "uid": "hello-world-svc",
+      "schemaVersion": 38,
+      "version": 2,
+      "refresh": "30s",
+      "graphTooltip": 1,
+      "time": {"from": "now-1h", "to": "now"},
+      "tags": ["hello-world", "service"],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "label": "Datasource",
+            "hide": 0,
+            "refresh": 1
+          }
+        ]
+      },
       "panels": [
         {
-          "title": "Request Rate (RPS)",
-          "type": "graph",
+          "id": 1, "type": "stat", "title": "Request Rate",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "area", "textMode": "auto"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "color": {"mode": "thresholds"},
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+            }
+          },
+          "targets": [{"expr": "sum(rate(hello_world_requests_total[5m]))", "legendFormat": "RPS", "refId": "A"}]
+        },
+        {
+          "id": 2, "type": "stat", "title": "Error Rate",
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 0.001},
+                  {"color": "red", "value": 0.01}
+                ]
+              }
+            }
+          },
           "targets": [{
-            "expr": "rate(hello_world_requests_total[5m])",
-            "legendFormat": "{{method}} {{endpoint}} {{status_code}}"
+            "expr": "sum(rate(hello_world_requests_total{status_code=~\"5..\"}[5m])) / sum(rate(hello_world_requests_total[5m]))",
+            "legendFormat": "Error %", "refId": "A"
           }]
         },
         {
-          "title": "P95 Latency",
-          "type": "graph",
+          "id": 3, "type": "stat", "title": "P95 Latency",
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 0.2},
+                  {"color": "red", "value": 0.5}
+                ]
+              }
+            }
+          },
           "targets": [{
-            "expr": "histogram_quantile(0.95, rate(hello_world_request_duration_seconds_bucket[5m]))",
-            "legendFormat": "p95 latency"
+            "expr": "job:hello_world_latency_p95:rate5m",
+            "legendFormat": "p95", "refId": "A"
           }]
         },
         {
-          "title": "Error Rate",
-          "type": "graph",
+          "id": 4, "type": "stat", "title": "Availability (5m)",
+          "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 3,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "red", "value": null},
+                  {"color": "yellow", "value": 0.99},
+                  {"color": "green", "value": 0.999}
+                ]
+              }
+            }
+          },
+          "targets": [{"expr": "job:hello_world_availability:rate5m", "legendFormat": "Availability", "refId": "A"}]
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "Request Rate by Status Code",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {
+            "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"}
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": {"lineWidth": 1, "fillOpacity": 8, "showPoints": "never"}
+            },
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "5xx"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
+              {"matcher": {"id": "byName", "options": "4xx"}, "properties": [{"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}]},
+              {"matcher": {"id": "byName", "options": "2xx"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}]}
+            ]
+          },
           "targets": [{
-            "expr": "rate(hello_world_requests_total{status_code=~'5..'}[5m]) / rate(hello_world_requests_total[5m])",
-            "legendFormat": "error rate"
+            "expr": "sum by(status_code) (rate(hello_world_requests_total[5m]))",
+            "legendFormat": "{{status_code}}", "refId": "A"
           }]
         },
         {
-          "title": "Pod CPU Usage",
-          "type": "graph",
-          "targets": [{
-            "expr": "sum(rate(container_cpu_usage_seconds_total{namespace='hello-world'}[5m])) by (pod)",
-            "legendFormat": "{{pod}}"
-          }]
+          "id": 6, "type": "timeseries", "title": "Latency Percentiles",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {
+            "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"}
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {"lineWidth": 2, "fillOpacity": 0, "showPoints": "never"}
+            }
+          },
+          "targets": [
+            {"expr": "job:hello_world_latency_p50:rate5m", "legendFormat": "p50", "refId": "A"},
+            {"expr": "job:hello_world_latency_p95:rate5m", "legendFormat": "p95", "refId": "B"},
+            {"expr": "job:hello_world_latency_p99:rate5m", "legendFormat": "p99", "refId": "C"}
+          ]
         },
         {
-          "title": "Pod Memory Usage",
-          "type": "graph",
-          "targets": [{
-            "expr": "sum(container_memory_working_set_bytes{namespace='hello-world'}) by (pod)",
-            "legendFormat": "{{pod}}"
-          }]
+          "id": 7, "type": "timeseries", "title": "Error Rate (%)",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"]}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "custom": {"lineWidth": 1, "fillOpacity": 20, "showPoints": "never"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.001}]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(hello_world_requests_total{status_code=~\"5..\"}[5m])) / sum(rate(hello_world_requests_total[5m]))",
+              "legendFormat": "5xx error rate", "refId": "A"
+            },
+            {
+              "expr": "sum(rate(hello_world_requests_total{status_code=~\"4..\"}[5m])) / sum(rate(hello_world_requests_total[5m]))",
+              "legendFormat": "4xx error rate", "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 8, "type": "timeseries", "title": "Pod CPU & Memory",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"]}},
+          "fieldConfig": {
+            "defaults": {
+              "custom": {"lineWidth": 1, "fillOpacity": 5, "showPoints": "never"}
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byRegexp", "options": "CPU.*"},
+                "properties": [{"id": "unit", "value": "percentunit"}, {"id": "custom.axisPlacement", "value": "left"}]
+              },
+              {
+                "matcher": {"id": "byRegexp", "options": "Memory.*"},
+                "properties": [{"id": "unit", "value": "bytes"}, {"id": "custom.axisPlacement", "value": "right"}]
+              }
+            ]
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"hello-world\", container=\"hello-world\"}[5m])) by (pod)",
+              "legendFormat": "CPU {{pod}}", "refId": "A"
+            },
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"hello-world\", container=\"hello-world\"}) by (pod)",
+              "legendFormat": "Memory {{pod}}", "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 9, "type": "timeseries", "title": "HPA — Replica Count",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "custom": {"lineWidth": 2, "fillOpacity": 10, "showPoints": "always"}
+            }
+          },
+          "targets": [
+            {
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"hello-world\"}",
+              "legendFormat": "Current", "refId": "A"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_spec_min_replicas{namespace=\"hello-world\"}",
+              "legendFormat": "Min", "refId": "B"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"hello-world\"}",
+              "legendFormat": "Max", "refId": "C"
+            }
+          ]
+        },
+        {
+          "id": 10, "type": "timeseries", "title": "Error Budget Burn Rate (multi-window)",
+          "description": "Burn rate 1.0 = sustainable. 14.4 = critical (2% budget/hour).",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {"lineWidth": 2, "fillOpacity": 5, "showPoints": "never"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 6},
+                  {"color": "red", "value": 14.4}
+                ]
+              }
+            }
+          },
+          "targets": [
+            {"expr": "job:hello_world_error_budget_burn:rate5m", "legendFormat": "5m window", "refId": "A"},
+            {"expr": "job:hello_world_error_budget_burn:rate1h", "legendFormat": "1h window", "refId": "B"},
+            {"expr": "job:hello_world_error_budget_burn:rate6h", "legendFormat": "6h window", "refId": "C"}
+          ]
         }
-      ],
-      "refresh": "30s",
-      "time": { "from": "now-1h", "to": "now" }
+      ]
     }

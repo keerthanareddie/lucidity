@@ -1,0 +1,318 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubernetes-cluster-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  kubernetes-cluster.json: |
+    {
+      "title": "Kubernetes Cluster — Health & Autoscaling",
+      "uid": "k8s-cluster",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "30s",
+      "graphTooltip": 1,
+      "time": {"from": "now-1h", "to": "now"},
+      "tags": ["kubernetes", "cluster", "hpa", "autoscaler"],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource", "type": "datasource",
+            "query": "prometheus", "label": "Datasource",
+            "hide": 0, "refresh": 1
+          },
+          {
+            "name": "namespace", "type": "query", "label": "Namespace",
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "query": "label_values(kube_pod_info, namespace)",
+            "refresh": 2, "multi": true, "includeAll": true, "allValue": ".*"
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Ready Nodes",
+          "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]
+              }
+            }
+          },
+          "targets": [{
+            "expr": "sum(kube_node_status_condition{condition=\"Ready\", status=\"true\"})",
+            "legendFormat": "Ready nodes", "refId": "A"
+          }]
+        },
+        {
+          "id": 2, "type": "stat", "title": "Running Pods",
+          "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "color": {"mode": "thresholds"},
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+            }
+          },
+          "targets": [{
+            "expr": "sum(kube_pod_status_phase{phase=\"Running\"})",
+            "legendFormat": "Running pods", "refId": "A"
+          }]
+        },
+        {
+          "id": 3, "type": "stat", "title": "Pending Pods",
+          "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 5}]
+              }
+            }
+          },
+          "targets": [{
+            "expr": "sum(kube_pod_status_phase{phase=\"Pending\"})",
+            "legendFormat": "Pending pods", "refId": "A"
+          }]
+        },
+        {
+          "id": 4, "type": "gauge", "title": "Cluster CPU Utilization",
+          "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit", "min": 0, "max": 1,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 0.7},
+                  {"color": "red", "value": 0.85}
+                ]
+              }
+            }
+          },
+          "targets": [{
+            "expr": "1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))",
+            "legendFormat": "CPU utilization", "refId": "A"
+          }]
+        },
+        {
+          "id": 5, "type": "gauge", "title": "Cluster Memory Utilization",
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit", "min": 0, "max": 1,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 0.7},
+                  {"color": "red", "value": 0.85}
+                ]
+              }
+            }
+          },
+          "targets": [{
+            "expr": "1 - (sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes))",
+            "legendFormat": "Memory utilization", "refId": "A"
+          }]
+        },
+        {
+          "id": 6, "type": "stat", "title": "Failed Pods",
+          "gridPos": {"h": 4, "w": 4, "x": 0, "y": 4},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]
+              }
+            }
+          },
+          "targets": [{"expr": "sum(kube_pod_status_phase{phase=\"Failed\"})", "legendFormat": "Failed", "refId": "A"}]
+        },
+        {
+          "id": 7, "type": "stat", "title": "OOMKilled (1h)",
+          "gridPos": {"h": 4, "w": 4, "x": 4, "y": 4},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]
+              }
+            }
+          },
+          "targets": [{
+            "expr": "sum(kube_pod_container_status_last_terminated_reason{reason=\"OOMKilled\"})",
+            "legendFormat": "OOMKilled", "refId": "A"
+          }]
+        },
+        {
+          "id": 8, "type": "stat", "title": "Not-Ready Nodes",
+          "gridPos": {"h": 4, "w": 4, "x": 8, "y": 4},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]
+              }
+            }
+          },
+          "targets": [{
+            "expr": "sum(kube_node_status_condition{condition=\"Ready\", status=\"false\"})",
+            "legendFormat": "Not ready", "refId": "A"
+          }]
+        },
+        {
+          "id": 9, "type": "timeseries", "title": "CPU Usage by Node",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "custom": {"lineWidth": 1, "fillOpacity": 8, "showPoints": "never"}
+            }
+          },
+          "targets": [{
+            "expr": "1 - avg by (node) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))",
+            "legendFormat": "{{node}}", "refId": "A"
+          }]
+        },
+        {
+          "id": 10, "type": "timeseries", "title": "Memory Usage by Node",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": {"lineWidth": 1, "fillOpacity": 8, "showPoints": "never"}
+            }
+          },
+          "targets": [{
+            "expr": "sum by (node) (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)",
+            "legendFormat": "{{node}}", "refId": "A"
+          }]
+        },
+        {
+          "id": 11, "type": "timeseries", "title": "Pod Count by Namespace",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "custom": {"lineWidth": 1, "fillOpacity": 10, "showPoints": "never"}
+            }
+          },
+          "targets": [{
+            "expr": "sum by (namespace) (kube_pod_status_phase{phase=\"Running\"})",
+            "legendFormat": "{{namespace}}", "refId": "A"
+          }]
+        },
+        {
+          "id": 12, "type": "timeseries", "title": "Container Restarts by Namespace",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"calcs": ["lastNotNull", "sum"], "displayMode": "table", "placement": "bottom"}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "custom": {"lineWidth": 1, "fillOpacity": 5, "showPoints": "never"}
+            }
+          },
+          "targets": [{
+            "expr": "sum by (namespace) (increase(kube_pod_container_status_restarts_total[5m]))",
+            "legendFormat": "{{namespace}}", "refId": "A"
+          }]
+        },
+        {
+          "id": 13, "type": "timeseries", "title": "HPA Replicas — hello-world",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "custom": {"lineWidth": 2, "fillOpacity": 10, "showPoints": "always"}
+            }
+          },
+          "targets": [
+            {
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"hello-world\"}",
+              "legendFormat": "Current replicas", "refId": "A"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_spec_min_replicas{namespace=\"hello-world\"}",
+              "legendFormat": "Min replicas", "refId": "B"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"hello-world\"}",
+              "legendFormat": "Max replicas", "refId": "C"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_status_desired_replicas{namespace=\"hello-world\"}",
+              "legendFormat": "Desired replicas", "refId": "D"
+            }
+          ]
+        },
+        {
+          "id": 14, "type": "timeseries", "title": "Cluster Autoscaler — Node Count & Activity",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom"}},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 0,
+              "custom": {"lineWidth": 2, "fillOpacity": 10, "showPoints": "always"}
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(kube_node_status_condition{condition=\"Ready\", status=\"true\"})",
+              "legendFormat": "Ready nodes", "refId": "A"
+            },
+            {
+              "expr": "cluster_autoscaler_nodes_count",
+              "legendFormat": "CA: total nodes", "refId": "B"
+            },
+            {
+              "expr": "cluster_autoscaler_unschedulable_pods_count",
+              "legendFormat": "Unschedulable pods", "refId": "C"
+            }
+          ]
+        }
+      ]
+    }

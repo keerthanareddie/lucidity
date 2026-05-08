@@ -1,0 +1,120 @@
+---
+# SLO recording rules — pre-computed for fast dashboard loading and consistent alert math
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: hello-world-recording-rules
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  groups:
+    # ── Request rates (multiple windows for burn-rate math) ──────────────────
+    - name: hello-world.rates
+      interval: 30s
+      rules:
+        - record: job:hello_world_requests:rate5m
+          expr: sum(rate(hello_world_requests_total[5m]))
+
+        - record: job:hello_world_errors:rate5m
+          expr: sum(rate(hello_world_requests_total{status_code=~"5.."}[5m]))
+
+        - record: job:hello_world_requests:rate30m
+          expr: sum(rate(hello_world_requests_total[30m]))
+
+        - record: job:hello_world_errors:rate30m
+          expr: sum(rate(hello_world_requests_total{status_code=~"5.."}[30m]))
+
+        - record: job:hello_world_requests:rate1h
+          expr: sum(rate(hello_world_requests_total[1h]))
+
+        - record: job:hello_world_errors:rate1h
+          expr: sum(rate(hello_world_requests_total{status_code=~"5.."}[1h]))
+
+        - record: job:hello_world_requests:rate6h
+          expr: sum(rate(hello_world_requests_total[6h]))
+
+        - record: job:hello_world_errors:rate6h
+          expr: sum(rate(hello_world_requests_total{status_code=~"5.."}[6h]))
+
+        - record: job:hello_world_requests:rate24h
+          expr: sum(rate(hello_world_requests_total[24h]))
+
+        - record: job:hello_world_errors:rate24h
+          expr: sum(rate(hello_world_requests_total{status_code=~"5.."}[24h]))
+
+    # ── Availability SLI ──────────────────────────────────────────────────────
+    - name: hello-world.availability
+      interval: 30s
+      rules:
+        - record: job:hello_world_availability:rate5m
+          expr: |
+            1 - (job:hello_world_errors:rate5m / job:hello_world_requests:rate5m)
+
+        - record: job:hello_world_availability:rate1h
+          expr: |
+            1 - (job:hello_world_errors:rate1h / job:hello_world_requests:rate1h)
+
+        - record: job:hello_world_availability:rate6h
+          expr: |
+            1 - (job:hello_world_errors:rate6h / job:hello_world_requests:rate6h)
+
+    # ── Latency SLI ───────────────────────────────────────────────────────────
+    - name: hello-world.latency
+      interval: 30s
+      rules:
+        - record: job:hello_world_latency_p50:rate5m
+          expr: |
+            histogram_quantile(0.50,
+              sum(rate(hello_world_request_duration_seconds_bucket[5m])) by (le)
+            )
+
+        - record: job:hello_world_latency_p95:rate5m
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(hello_world_request_duration_seconds_bucket[5m])) by (le)
+            )
+
+        - record: job:hello_world_latency_p99:rate5m
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(hello_world_request_duration_seconds_bucket[5m])) by (le)
+            )
+
+    # ── Error budget burn rates ───────────────────────────────────────────────
+    # SLO target: 99.9% availability → error budget = 0.001 (0.1%)
+    # Burn rate 1.0 = consuming budget at sustainable rate (exhausts in 30d)
+    # Burn rate 14.4 = exhausts 2% of budget per hour → page immediately
+    # Burn rate 6.0  = exhausts 5% of budget per 6h  → ticket
+    # Burn rate 3.0  = exhausts 10% of budget per 3d → warning
+    - name: hello-world.error-budget
+      interval: 60s
+      rules:
+        - record: job:hello_world_error_budget_burn:rate5m
+          expr: |
+            (job:hello_world_errors:rate5m / job:hello_world_requests:rate5m) / 0.001
+
+        - record: job:hello_world_error_budget_burn:rate30m
+          expr: |
+            (job:hello_world_errors:rate30m / job:hello_world_requests:rate30m) / 0.001
+
+        - record: job:hello_world_error_budget_burn:rate1h
+          expr: |
+            (job:hello_world_errors:rate1h / job:hello_world_requests:rate1h) / 0.001
+
+        - record: job:hello_world_error_budget_burn:rate6h
+          expr: |
+            (job:hello_world_errors:rate6h / job:hello_world_requests:rate6h) / 0.001
+
+        - record: job:hello_world_error_budget_burn:rate24h
+          expr: |
+            (job:hello_world_errors:rate24h / job:hello_world_requests:rate24h) / 0.001
+
+        # % of monthly error budget remaining (1.0 = intact, 0.0 = exhausted)
+        - record: job:hello_world_error_budget_remaining:30d
+          expr: |
+            1 - (
+              sum(increase(hello_world_requests_total{status_code=~"5.."}[30d]))
+              /
+              (sum(increase(hello_world_requests_total[30d])) * 0.001)
+            )

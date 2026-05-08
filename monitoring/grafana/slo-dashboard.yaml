@@ -1,0 +1,270 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-world-slo-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  hello-world-slo.json: |
+    {
+      "title": "Hello World — SLO & Error Budget",
+      "uid": "hello-world-slo",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "1m",
+      "graphTooltip": 1,
+      "time": {"from": "now-7d", "to": "now"},
+      "tags": ["hello-world", "slo", "error-budget"],
+      "description": "SLI/SLO tracking: 99.9% availability + p95 < 500ms. Error budget = 43.8 min/month.",
+      "templating": {
+        "list": [
+          {
+            "name": "datasource", "type": "datasource",
+            "query": "prometheus", "label": "Datasource",
+            "hide": 0, "refresh": 1
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "SLO Target",
+          "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "none", "textMode": "value"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit", "decimals": 1,
+              "color": {"fixedColor": "blue", "mode": "fixed"},
+              "mappings": [{"type": "value", "options": {"0.999": {"text": "99.9%"}}}]
+            }
+          },
+          "targets": [{"expr": "vector(0.999)", "legendFormat": "SLO", "refId": "A"}]
+        },
+        {
+          "id": 2, "type": "stat", "title": "Current Availability (1h)",
+          "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit", "decimals": 3,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "red", "value": null},
+                  {"color": "yellow", "value": 0.99},
+                  {"color": "green", "value": 0.999}
+                ]
+              }
+            }
+          },
+          "targets": [{"expr": "job:hello_world_availability:rate1h", "legendFormat": "Availability", "refId": "A"}]
+        },
+        {
+          "id": 3, "type": "gauge", "title": "Error Budget Remaining (30d rolling)",
+          "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"]},
+            "minVizHeight": 75, "minVizWidth": 75,
+            "orientation": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit", "decimals": 1,
+              "min": 0, "max": 1,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "red", "value": null},
+                  {"color": "yellow", "value": 0.25},
+                  {"color": "green", "value": 0.50}
+                ]
+              }
+            }
+          },
+          "targets": [{
+            "expr": "clamp_min(job:hello_world_error_budget_remaining:30d, 0)",
+            "legendFormat": "Budget remaining", "refId": "A"
+          }]
+        },
+        {
+          "id": 4, "type": "stat", "title": "Current Burn Rate (1h)",
+          "description": "1.0 = sustainable. 14.4 = CRITICAL.",
+          "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 1,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 6},
+                  {"color": "red", "value": 14.4}
+                ]
+              }
+            }
+          },
+          "targets": [{"expr": "job:hello_world_error_budget_burn:rate1h", "legendFormat": "Burn rate", "refId": "A"}]
+        },
+        {
+          "id": 5, "type": "stat", "title": "Current Burn Rate (6h)",
+          "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short", "decimals": 1,
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 3},
+                  {"color": "red", "value": 6}
+                ]
+              }
+            }
+          },
+          "targets": [{"expr": "job:hello_world_error_budget_burn:rate6h", "legendFormat": "Burn rate", "refId": "A"}]
+        },
+        {
+          "id": 6, "type": "stat", "title": "Latency SLO: p95 < 500ms",
+          "gridPos": {"h": 4, "w": 4, "x": 16, "y": 4},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 0.2},
+                  {"color": "red", "value": 0.5}
+                ]
+              }
+            }
+          },
+          "targets": [{"expr": "job:hello_world_latency_p95:rate5m", "legendFormat": "p95", "refId": "A"}]
+        },
+        {
+          "id": 7, "type": "stat", "title": "Latency SLO: p99",
+          "gridPos": {"h": 4, "w": 4, "x": 20, "y": 4},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "color": {"mode": "thresholds"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 0.5},
+                  {"color": "red", "value": 2.0}
+                ]
+              }
+            }
+          },
+          "targets": [{"expr": "job:hello_world_latency_p99:rate5m", "legendFormat": "p99", "refId": "A"}]
+        },
+        {
+          "id": 8, "type": "timeseries", "title": "Error Budget Burn Rate — All Windows",
+          "description": "Dashed lines: Tier-1 threshold (14.4x) and Tier-2 threshold (6x).",
+          "gridPos": {"h": 9, "w": 24, "x": 0, "y": 8},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {
+            "legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "right"}
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {"lineWidth": 2, "fillOpacity": 0, "showPoints": "never"}
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "Tier-1 threshold (14.4x)"},
+                "properties": [
+                  {"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}},
+                  {"id": "custom.lineStyle", "value": {"dash": [10, 10], "fill": "dash"}},
+                  {"id": "custom.lineWidth", "value": 1}
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Tier-2 threshold (6x)"},
+                "properties": [
+                  {"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}},
+                  {"id": "custom.lineStyle", "value": {"dash": [10, 10], "fill": "dash"}},
+                  {"id": "custom.lineWidth", "value": 1}
+                ]
+              }
+            ]
+          },
+          "targets": [
+            {"expr": "job:hello_world_error_budget_burn:rate5m", "legendFormat": "5m window", "refId": "A"},
+            {"expr": "job:hello_world_error_budget_burn:rate1h", "legendFormat": "1h window", "refId": "B"},
+            {"expr": "job:hello_world_error_budget_burn:rate6h", "legendFormat": "6h window", "refId": "C"},
+            {"expr": "job:hello_world_error_budget_burn:rate24h", "legendFormat": "24h window", "refId": "D"},
+            {"expr": "vector(14.4)", "legendFormat": "Tier-1 threshold (14.4x)", "refId": "E"},
+            {"expr": "vector(6)", "legendFormat": "Tier-2 threshold (6x)", "refId": "F"}
+          ]
+        },
+        {
+          "id": 9, "type": "timeseries", "title": "Availability Trend",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 17},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {
+            "legend": {"calcs": ["mean", "min", "lastNotNull"], "displayMode": "table", "placement": "bottom"}
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit", "decimals": 3,
+              "min": 0.98, "max": 1,
+              "custom": {"lineWidth": 2, "fillOpacity": 10, "showPoints": "never"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "red", "value": null},
+                  {"color": "yellow", "value": 0.99},
+                  {"color": "green", "value": 0.999}
+                ]
+              }
+            }
+          },
+          "targets": [
+            {"expr": "job:hello_world_availability:rate5m", "legendFormat": "5m", "refId": "A"},
+            {"expr": "job:hello_world_availability:rate1h", "legendFormat": "1h", "refId": "B"},
+            {"expr": "job:hello_world_availability:rate6h", "legendFormat": "6h", "refId": "C"},
+            {"expr": "vector(0.999)", "legendFormat": "SLO target (99.9%)", "refId": "D"}
+          ]
+        },
+        {
+          "id": 10, "type": "timeseries", "title": "Latency vs SLO Targets",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 17},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "options": {
+            "legend": {"calcs": ["mean", "max", "lastNotNull"], "displayMode": "table", "placement": "bottom"}
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {"lineWidth": 2, "fillOpacity": 5, "showPoints": "never"}
+            }
+          },
+          "targets": [
+            {"expr": "job:hello_world_latency_p50:rate5m", "legendFormat": "p50", "refId": "A"},
+            {"expr": "job:hello_world_latency_p95:rate5m", "legendFormat": "p95", "refId": "B"},
+            {"expr": "job:hello_world_latency_p99:rate5m", "legendFormat": "p99", "refId": "C"},
+            {"expr": "vector(0.5)", "legendFormat": "p95 SLO (500ms)", "refId": "D"}
+          ]
+        }
+      ]
+    }

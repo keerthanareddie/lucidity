@@ -82,7 +82,11 @@ module "eks" {
   node_min_size      = var.node_min_size
   node_max_size      = var.node_max_size
   environment        = var.environment
-  tags               = local.common_tags
+  # CA discovery tags must be on the node group so they propagate to the ASG
+  tags = merge(local.common_tags, {
+    "k8s.io/cluster-autoscaler/enabled"               = "true"
+    "k8s.io/cluster-autoscaler/${local.cluster_name}" = "owned"
+  })
 }
 
 # ── External Secrets Operator ─────────────────────────────────────────────────
@@ -108,6 +112,106 @@ module "irsa_hello_world" {
   service_account_name = "hello-world"
   policy_arns          = []
   tags                 = local.common_tags
+}
+
+# ── Cluster Autoscaler ────────────────────────────────────────────────────────
+resource "aws_iam_policy" "cluster_autoscaler" {
+  name        = "${local.cluster_name}-cluster-autoscaler"
+  description = "Cluster Autoscaler — describe and modify ASGs for ${local.cluster_name}"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ReadASGs"
+        Effect = "Allow"
+        Action = [
+          "autoscaling:DescribeAutoScalingGroups",
+          "autoscaling:DescribeAutoScalingInstances",
+          "autoscaling:DescribeLaunchConfigurations",
+          "autoscaling:DescribeScalingActivities",
+          "autoscaling:DescribeTags",
+          "ec2:DescribeLaunchTemplateVersions",
+          "ec2:DescribeInstanceTypes",
+          "ec2:DescribeImages",
+          "ec2:GetInstanceTypesFromInstanceRequirements",
+          "eks:DescribeNodegroup",
+        ]
+        Resource = ["*"]
+      },
+      {
+        Sid    = "ModifyTaggedASGs"
+        Effect = "Allow"
+        Action = [
+          "autoscaling:SetDesiredCapacity",
+          "autoscaling:TerminateInstanceInAutoScalingGroup",
+        ]
+        Resource = ["*"]
+        Condition = {
+          StringEquals = {
+            "autoscaling:ResourceTag/k8s.io/cluster-autoscaler/enabled"               = "true"
+            "autoscaling:ResourceTag/k8s.io/cluster-autoscaler/${local.cluster_name}" = "owned"
+          }
+        }
+      }
+    ]
+  })
+  tags = local.common_tags
+}
+
+module "irsa_cluster_autoscaler" {
+  source               = "../../modules/irsa"
+  cluster_name         = local.cluster_name
+  oidc_provider_arn    = module.eks.oidc_provider_arn
+  oidc_provider_url    = module.eks.oidc_provider_url
+  namespace            = "kube-system"
+  service_account_name = "cluster-autoscaler"
+  policy_arns          = [aws_iam_policy.cluster_autoscaler.arn]
+  tags                 = local.common_tags
+  depends_on           = [module.eks]
+}
+
+resource "helm_release" "cluster_autoscaler" {
+  name       = "cluster-autoscaler"
+  repository = "https://kubernetes.github.io/autoscaler"
+  chart      = "cluster-autoscaler"
+  version    = "9.36.0"
+  namespace  = "kube-system"
+  atomic     = true
+  wait       = true
+  timeout    = 300
+
+  values = [<<-EOF
+    autoDiscovery:
+      clusterName: ${local.cluster_name}
+    awsRegion: ${var.aws_region}
+    rbac:
+      serviceAccount:
+        name: cluster-autoscaler
+        annotations:
+          eks.amazonaws.com/role-arn: ${module.irsa_cluster_autoscaler.role_arn}
+    extraArgs:
+      balance-similar-node-groups: "true"
+      skip-nodes-with-system-pods: "false"
+      scale-down-delay-after-add: 5m
+      scale-down-unneeded-time: 5m
+      scale-down-utilization-threshold: "0.5"
+      max-node-provision-time: 15m
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    podAnnotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8085"
+      prometheus.io/path: "/metrics"
+    priorityClassName: system-cluster-critical
+  EOF
+  ]
+
+  depends_on = [module.eks, module.irsa_cluster_autoscaler]
 }
 
 # ── ECR Repository ────────────────────────────────────────────────────────────
@@ -197,19 +301,74 @@ resource "helm_release" "prometheus_stack" {
         dashboards:
           enabled: true
           searchNamespace: ALL
+        datasources:
+          enabled: true
       additionalDataSources:
         - name: Loki
           type: loki
           url: http://loki.monitoring.svc.cluster.local:3100
           access: proxy
+          isDefault: false
         - name: Tempo
           type: tempo
           url: http://tempo.monitoring.svc.cluster.local:3100
           access: proxy
+          isDefault: false
+      grafana.ini:
+        auth.anonymous:
+          enabled: false
+        server:
+          root_url: "%(protocol)s://%(domain)s/grafana"
     prometheus:
       prometheusSpec:
         retention: 15d
+        retentionSize: "10GB"
         serviceMonitorSelectorNilUsesHelmValues: false
+        ruleNamespaceSelector: {}
+        ruleSelectorNilUsesHelmValues: false
+    alertmanager:
+      config:
+        global:
+          resolve_timeout: 5m
+        route:
+          group_by: ["namespace", "alertname", "severity"]
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 4h
+          receiver: "null"
+          routes:
+            - matchers:
+                - alertname = "Watchdog"
+              receiver: "null"
+            - matchers:
+                - severity = "critical"
+              receiver: "critical"
+              repeat_interval: 1h
+            - matchers:
+                - severity = "warning"
+              receiver: "warning"
+        receivers:
+          - name: "null"
+          - name: "critical"
+            # Replace with your notification config (Slack/PagerDuty/email)
+            # Example Slack:
+            # slack_configs:
+            #   - api_url: "https://hooks.slack.com/services/YOUR/WEBHOOK"
+            #     channel: "#alerts-critical"
+            #     send_resolved: true
+            #     title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+            #     text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
+          - name: "warning"
+            # slack_configs:
+            #   - api_url: "https://hooks.slack.com/services/YOUR/WEBHOOK"
+            #     channel: "#alerts-warning"
+            #     send_resolved: true
+        inhibit_rules:
+          - source_matchers:
+              - severity = "critical"
+            target_matchers:
+              - severity = "warning"
+            equal: ["namespace", "alertname"]
   EOF
   ]
   depends_on = [kubernetes_namespace.namespaces, module.external_secrets]
@@ -239,25 +398,46 @@ resource "null_resource" "apply_manifests" {
   provisioner "local-exec" {
     command = <<-EOF
       aws eks update-kubeconfig --name ${local.cluster_name} --region ${var.aws_region}
+
       # Wait for ESO CRDs to be ready
       kubectl wait --for=condition=established crd/externalsecrets.external-secrets.io --timeout=120s
+
+      # ExternalSecrets — pull Grafana password, Let's Encrypt email, app secrets
       kubectl apply -f ${path.module}/../../../monitoring/external-secrets.yaml
-      kubectl apply -f ${path.module}/../../../monitoring/dns-and-certs.yaml
+
+      # Wait for secrets to sync before applying issuers that need the email
+      sleep 15
+      LETSENCRYPT_EMAIL=$(aws secretsmanager get-secret-value \
+        --secret-id hello-world/prod/letsencrypt \
+        --query SecretString --output text \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)['email'])" 2>/dev/null || echo "admin@example.com")
+      sed "s/REPLACE_WITH_YOUR_EMAIL/$${LETSENCRYPT_EMAIL}/g" \
+        ${path.module}/../../../monitoring/dns-and-certs.yaml | kubectl apply -f -
+
+      # Prometheus ServiceMonitor + SLO alerts + recording rules
       kubectl apply -f ${path.module}/../../../monitoring/prometheus/servicemonitor.yaml
+      kubectl apply -f ${path.module}/../../../monitoring/prometheus/recording-rules.yaml
+
+      # Grafana dashboards (service, SLO, K8s cluster)
       kubectl apply -f ${path.module}/../../../monitoring/prometheus/grafana-dashboard.yaml
+      kubectl apply -f ${path.module}/../../../monitoring/grafana/slo-dashboard.yaml
+      kubectl apply -f ${path.module}/../../../monitoring/grafana/kubernetes-cluster-dashboard.yaml
     EOF
   }
   depends_on = [
     module.external_secrets,
     helm_release.cert_manager,
     helm_release.prometheus_stack,
+    helm_release.cluster_autoscaler,
   ]
 }
 
 # ── Outputs ───────────────────────────────────────────────────────────────────
-output "cluster_name"              { value = module.eks.cluster_name }
-output "cluster_endpoint"          { value = module.eks.cluster_endpoint }
-output "ecr_repository_url"        { value = aws_ecr_repository.hello_world.repository_url }
-output "hello_world_irsa_role_arn" { value = module.irsa_hello_world.role_arn }
-output "get_kubeconfig_command"    { value = "aws eks update-kubeconfig --name ${local.cluster_name} --region ${var.aws_region}" }
-output "get_grafana_password"      { value = "aws secretsmanager get-secret-value --secret-id hello-world/prod/grafana --query SecretString --output text | python3 -m json.tool" }
+output "cluster_name"                    { value = module.eks.cluster_name }
+output "cluster_endpoint"               { value = module.eks.cluster_endpoint }
+output "ecr_repository_url"             { value = aws_ecr_repository.hello_world.repository_url }
+output "hello_world_irsa_role_arn"      { value = module.irsa_hello_world.role_arn }
+output "cluster_autoscaler_role_arn"    { value = module.irsa_cluster_autoscaler.role_arn }
+output "get_kubeconfig_command"         { value = "aws eks update-kubeconfig --name ${local.cluster_name} --region ${var.aws_region}" }
+output "get_grafana_password"           { value = "aws secretsmanager get-secret-value --secret-id hello-world/prod/grafana --query SecretString --output text | python3 -m json.tool" }
+output "get_nlb_hostname"               { value = "kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'" }

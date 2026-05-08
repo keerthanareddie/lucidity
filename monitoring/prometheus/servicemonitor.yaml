@@ -1,12 +1,12 @@
 ---
-# ServiceMonitor tells Prometheus Operator to scrape our app
+# ServiceMonitor — tells Prometheus Operator to scrape the hello-world service
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: hello-world
   namespace: monitoring
   labels:
-    release: prometheus    # must match Prometheus Operator selector
+    release: prometheus
 spec:
   namespaceSelector:
     matchNames:
@@ -19,49 +19,138 @@ spec:
       path: /metrics
       interval: 15s
       scrapeTimeout: 10s
+
 ---
-# PrometheusRule — SLO-based alerts
+# PrometheusRule — SLO-based multi-window burn rate alerts (Google SRE model)
+#
+# SLO: 99.9% availability + p95 latency < 500ms
+# Error budget: 0.1% of requests = ~43.8 minutes/month
+#
+# Alert tiers (multi-window = fewer false positives):
+#   Tier 1 CRITICAL: burn > 14.4x on 1h + 5m  → page now (2% budget/hour)
+#   Tier 2 WARNING:  burn > 6x on 6h + 30m    → ticket   (5% budget/6h)
+#   Tier 3 INFO:     burn > 3x on 24h + 6h    → warning   (10% budget/3d)
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: hello-world-alerts
+  name: hello-world-slo-alerts
   namespace: monitoring
   labels:
     release: prometheus
 spec:
   groups:
-    - name: hello-world.slo
+    # ── Availability SLO alerts ───────────────────────────────────────────────
+    - name: hello-world.availability.slo
       interval: 30s
       rules:
-        # SLO: 99.9% of requests succeed
-        - alert: HelloWorldHighErrorRate
+        # Tier 1: Fast burn — 2% budget consumed in 1 hour → page immediately
+        - alert: HelloWorldErrorBudgetFastBurn
           expr: |
-            rate(hello_world_requests_total{status_code=~"5.."}[5m])
-            / rate(hello_world_requests_total[5m]) > 0.001
+            job:hello_world_error_budget_burn:rate1h > 14.4
+            and
+            job:hello_world_error_budget_burn:rate5m > 14.4
+          for: 2m
+          labels:
+            severity: critical
+            slo: availability
+            tier: "1"
+            team: platform
+          annotations:
+            summary: "CRITICAL: Hello World burning error budget at {{ $value | humanize }}x rate"
+            description: >
+              Error budget burn rate is {{ $value | humanize }}x the sustainable rate.
+              At this rate, the monthly budget will be exhausted in
+              {{ div 720.0 $value | humanize }} hours.
+              Check https://your-grafana/d/hello-world-slo for error budget status.
+            runbook: "https://wiki.example.com/runbooks/hello-world-high-error-rate"
+
+        # Tier 2: Slow burn — 5% budget consumed in 6 hours → create ticket
+        - alert: HelloWorldErrorBudgetSlowBurn
+          expr: |
+            job:hello_world_error_budget_burn:rate6h > 6
+            and
+            job:hello_world_error_budget_burn:rate30m > 6
+          for: 15m
+          labels:
+            severity: warning
+            slo: availability
+            tier: "2"
+            team: platform
+          annotations:
+            summary: "WARNING: Hello World slow error budget burn at {{ $value | humanize }}x rate"
+            description: >
+              Error budget burn rate is {{ $value | humanize }}x sustained over 6h.
+              5% of the monthly error budget will be consumed at this rate.
+
+        # Tier 3: Very slow burn — 10% budget over 3 days → watch
+        - alert: HelloWorldErrorBudgetVerySlowBurn
+          expr: |
+            job:hello_world_error_budget_burn:rate24h > 3
+            and
+            job:hello_world_error_budget_burn:rate6h > 3
+          for: 1h
+          labels:
+            severity: info
+            slo: availability
+            tier: "3"
+            team: platform
+          annotations:
+            summary: "INFO: Hello World sustained elevated error rate ({{ $value | humanize }}x budget rate)"
+            description: "Low-level budget consumption. Monitor trend — no immediate action needed."
+
+        # Error budget < 10% remaining in current 30-day window
+        - alert: HelloWorldErrorBudgetAlmostExhausted
+          expr: job:hello_world_error_budget_remaining:30d < 0.10
           for: 5m
           labels:
             severity: critical
+            slo: availability
             team: platform
           annotations:
-            summary: "High error rate on hello-world"
-            description: "Error rate is {{ $value | humanizePercentage }} — SLO breach imminent"
+            summary: "CRITICAL: Hello World error budget is {{ $value | humanizePercentage }} remaining"
+            description: "Less than 10% of the monthly error budget remains. Freeze non-critical changes."
 
-        # SLO: p95 latency < 500ms
-        - alert: HelloWorldHighLatency
+    # ── Latency SLO alerts ────────────────────────────────────────────────────
+    - name: hello-world.latency.slo
+      interval: 30s
+      rules:
+        - alert: HelloWorldLatencyBudgetBurn
           expr: |
             histogram_quantile(0.95,
-              rate(hello_world_request_duration_seconds_bucket[5m])
+              sum(rate(hello_world_request_duration_seconds_bucket[1h])) by (le)
+            ) > 0.5
+            and
+            histogram_quantile(0.95,
+              sum(rate(hello_world_request_duration_seconds_bucket[5m])) by (le)
             ) > 0.5
           for: 5m
           labels:
             severity: warning
+            slo: latency
             team: platform
           annotations:
-            summary: "High p95 latency on hello-world"
-            description: "p95 latency is {{ $value }}s — threshold is 500ms"
+            summary: "Latency SLO breach: p95 is {{ $value | humanizeDuration }}"
+            description: "p95 latency exceeds 500ms SLO threshold sustained for 5m"
 
-        # Pod availability
-        - alert: HelloWorldPodDown
+        - alert: HelloWorldLatencyCritical
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(hello_world_request_duration_seconds_bucket[5m])) by (le)
+            ) > 2.0
+          for: 3m
+          labels:
+            severity: critical
+            slo: latency
+            team: platform
+          annotations:
+            summary: "CRITICAL: Hello World p99 latency is {{ $value | humanizeDuration }}"
+            description: "p99 latency exceeds 2 seconds — service is severely degraded"
+
+    # ── Infrastructure alerts ─────────────────────────────────────────────────
+    - name: hello-world.infra
+      interval: 30s
+      rules:
+        - alert: HelloWorldNoPods
           expr: |
             kube_deployment_status_replicas_available{
               namespace="hello-world", deployment="hello-world"
@@ -69,5 +158,73 @@ spec:
           for: 1m
           labels:
             severity: critical
+            team: platform
           annotations:
-            summary: "Hello World has no available pods"
+            summary: "Hello World has zero available pods"
+            description: "All hello-world pods are unavailable. Service is down."
+
+        - alert: HelloWorldHPAAtMaxReplicas
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{
+              namespace="hello-world", horizontalpodautoscaler="hello-world"
+            }
+            >=
+            kube_horizontalpodautoscaler_spec_max_replicas{
+              namespace="hello-world", horizontalpodautoscaler="hello-world"
+            }
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Hello World HPA is at max replicas — possible traffic spike or leak"
+            description: "HPA has been at max replicas for 10m. Review resource limits or max replica count."
+
+        - alert: HelloWorldPodCrashLooping
+          expr: |
+            rate(kube_pod_container_status_restarts_total{
+              namespace="hello-world"
+            }[15m]) * 60 > 1
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Hello World pod {{ $labels.pod }} is crash-looping"
+            description: "Pod {{ $labels.pod }} has restarted more than once per minute for 5m."
+
+        - alert: HelloWorldHighCPU
+          expr: |
+            sum(rate(container_cpu_usage_seconds_total{
+              namespace="hello-world", container="hello-world"
+            }[5m])) by (pod)
+            /
+            sum(kube_pod_container_resource_limits{
+              namespace="hello-world", container="hello-world", resource="cpu"
+            }) by (pod)
+            > 0.85
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Hello World pod {{ $labels.pod }} CPU at {{ $value | humanizePercentage }}"
+            description: "CPU usage above 85% of limit for 10m. HPA should be scaling."
+
+        - alert: HelloWorldHighMemory
+          expr: |
+            sum(container_memory_working_set_bytes{
+              namespace="hello-world", container="hello-world"
+            }) by (pod)
+            /
+            sum(kube_pod_container_resource_limits{
+              namespace="hello-world", container="hello-world", resource="memory"
+            }) by (pod)
+            > 0.85
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Hello World pod {{ $labels.pod }} memory at {{ $value | humanizePercentage }}"
+            description: "Memory usage above 85% of limit. Risk of OOM eviction."
