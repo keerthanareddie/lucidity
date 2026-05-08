@@ -63,9 +63,21 @@ repos:
         exclude: ^helm/
 
   # ── Secret detection ──────────────────────────────────────────────────────────
+  # KeywordDetector is disabled in the baseline — it false-positives on K8s
+  # resource names (ExternalSecret, secretName, etc.). Gitleaks handles real
+  # secret scanning in the pipeline with much lower false-positive rate.
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
     hooks:
       - id: detect-secrets
         args: [--baseline, .secrets.baseline]
-        exclude: (terraform\.tfstate|\.terraform\.lock\.hcl|package-lock\.json)
+        # Exclude K8s manifests, Helm charts, and Terraform state — these
+        # reference secret resource names but contain no actual credentials.
+        exclude: >
+          (?x)^(
+            monitoring/.*\.yaml|
+            helm/.*\.yaml|
+            terraform/.*\.tfstate.*|
+            \.terraform\.lock\.hcl|
+            package-lock\.json
+          )$
