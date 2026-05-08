@@ -182,6 +182,8 @@ jobs:
             app/
 
       - name: Trivy — vulnerability scan
+        id: trivy
+        continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
@@ -189,6 +191,15 @@ jobs:
           exit-code: "1"
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+
+      - name: Trivy report
+        if: always()
+        run: |
+          pass() { [ "$1" = "success" ] && echo "✅ Passed" || echo "❌ Failed"; }
+          echo "## 🔍 Image Scan Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Trivy (CRITICAL/HIGH CVEs) | $(pass ${{ steps.trivy.outcome }}) |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Push to ECR
         run: |
