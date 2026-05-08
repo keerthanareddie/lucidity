@@ -254,7 +254,12 @@ resource "aws_eks_cluster" "main" {
     subnet_ids              = var.private_subnet_ids
     security_group_ids      = [aws_security_group.cluster.id]
     endpoint_private_access = true
-    endpoint_public_access  = true    # required for CI runners; restrict with public_access_cidrs in prod
+    endpoint_public_access  = true
+  }
+
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
   }
 
   enabled_cluster_log_types = [
@@ -263,7 +268,9 @@ resource "aws_eks_cluster" "main" {
 
   encryption_config {
     resources = ["secrets"]
-    provider  { key_arn = aws_kms_key.eks.arn }
+    provider {
+      key_arn = aws_kms_key.eks.arn
+    }
   }
 
   depends_on = [
@@ -344,10 +351,10 @@ resource "aws_eks_node_group" "main" {
 # ── EKS Add-ons ───────────────────────────────────────────────────────────────
 resource "aws_eks_addon" "addons" {
   for_each = {
-    coredns            = "v1.11.1-eksbuild.4"
-    kube-proxy         = "v1.29.3-eksbuild.2"
-    vpc-cni            = "v1.18.1-eksbuild.3"
-    aws-ebs-csi-driver = "v1.30.0-eksbuild.1"
+    coredns            = "v1.11.4-eksbuild.2"
+    kube-proxy         = "v1.32.3-eksbuild.2"
+    vpc-cni            = "v1.19.5-eksbuild.1"
+    aws-ebs-csi-driver = "v1.44.0-eksbuild.1"
   }
   cluster_name                = aws_eks_cluster.main.name
   addon_name                  = each.key
