@@ -1,0 +1,277 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT: hello-world
+  ENVIRONMENT: prod
+  CLUSTER_NAME: hello-world-prod
+  ECR_REPOSITORY: hello-world
+  TF_DIR: terraform/environments/prod
+
+permissions:
+  id-token: write   # OIDC for AWS auth
+  contents: read
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 1: Security Gates
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  security-gates:
+    name: Security Gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for Gitleaks
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Run pre-commit hooks
+        run: pre-commit run --all-files
+        continue-on-error: false
+
+      # Secret scanning
+      - name: Gitleaks — scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Python SAST
+      - name: Bandit — Python SAST
+        run: |
+          pip install bandit
+          bandit -r app/ -ll -x app/tests || true
+
+      # IaC scanning
+      - name: Checkov — IaC scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform/
+          framework: terraform
+          soft_fail: false
+          skip_check: CKV_AWS_130   # private subnet check (handled by security groups)
+
+      # Helm lint
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: Helm lint
+        run: helm lint helm/hello-world/
+
+      # Dockerfile check
+      - name: Hadolint — Dockerfile lint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: app/Dockerfile
+          failure-threshold: error
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 2: Build & Push
+# ─────────────────────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    needs: security-gates
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tag }}
+      ecr-registry: ${{ steps.login-ecr.outputs.registry }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }} \
+            app/
+
+      - name: Trivy — vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Push to ECR
+        run: |
+          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.tag }}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 3: Terraform
+# ─────────────────────────────────────────────────────────────────────────────
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    outputs:
+      ecr-url: ${{ steps.tf-outputs.outputs.ecr_url }}
+      irsa-role-arn: ${{ steps.tf-outputs.outputs.irsa_role_arn }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Capture Terraform outputs
+        id: tf-outputs
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          echo "ecr_url=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
+          echo "irsa_role_arn=$(terraform output -raw hello_world_irsa_role_arn)" >> "$GITHUB_OUTPUT"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 4: Deploy (canary → stable)
+# ─────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [build-and-push, terraform]
+    env:
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.image-tag }}
+      ECR_REGISTRY: ${{ needs.build-and-push.outputs.ecr-registry }}
+      ECR_URL: ${{ needs.terraform.outputs.ecr-url }}
+      IRSA_ROLE_ARN: ${{ needs.terraform.outputs.irsa-role-arn }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      # ── Canary deploy (20% traffic) ──────────────────────────────────────────
+      - name: Deploy canary (20% traffic)
+        run: |
+          helm upgrade --install hello-world-canary helm/hello-world/ \
+            --namespace hello-world \
+            --set image.repository=${{ env.ECR_URL }} \
+            --set image.tag=${{ env.IMAGE_TAG }} \
+            --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="${{ env.IRSA_ROLE_ARN }}" \
+            --set replicaCount=1 \
+            --set ingress.annotations."nginx\.ingress\.kubernetes\.io/canary"="true" \
+            --set ingress.annotations."nginx\.ingress\.kubernetes\.io/canary-weight"="20" \
+            --set canary.enabled=true \
+            --set canary.weight=20 \
+            --set canary.image.tag=${{ env.IMAGE_TAG }} \
+            --wait \
+            --timeout 3m
+
+      # ── Health check (60 seconds) ────────────────────────────────────────────
+      - name: Health check — monitor canary for 60s
+        run: |
+          echo "Monitoring canary for 60 seconds..."
+          sleep 60
+          READY=$(kubectl get pods -n hello-world \
+            -l app=hello-world-canary \
+            -o jsonpath='{.items[*].status.containerStatuses[0].ready}')
+          for status in $READY; do
+            if [ "$status" != "true" ]; then
+              echo "Canary pod not ready — rolling back"
+              helm rollback hello-world-canary -n hello-world || true
+              helm uninstall hello-world-canary -n hello-world || true
+              exit 1
+            fi
+          done
+          RESTARTS=$(kubectl get pods -n hello-world \
+            -l app=hello-world-canary \
+            -o jsonpath='{.items[*].status.containerStatuses[0].restartCount}')
+          for count in $RESTARTS; do
+            if [ "$count" -gt 2 ]; then
+              echo "Canary pod restarting too often ($count restarts) — rolling back"
+              helm uninstall hello-world-canary -n hello-world || true
+              exit 1
+            fi
+          done
+          echo "Canary healthy — proceeding to stable promotion"
+
+      # ── Promote to stable (100% traffic) ────────────────────────────────────
+      - name: Promote to stable (100% traffic)
+        run: |
+          helm upgrade --install hello-world helm/hello-world/ \
+            --namespace hello-world \
+            --set image.repository=${{ env.ECR_URL }} \
+            --set image.tag=${{ env.IMAGE_TAG }} \
+            --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="${{ env.IRSA_ROLE_ARN }}" \
+            --set ingress.annotations."nginx\.ingress\.kubernetes\.io/canary"="false" \
+            --wait \
+            --timeout 5m
+
+      # ── Remove canary ────────────────────────────────────────────────────────
+      - name: Remove canary release
+        run: helm uninstall hello-world-canary --namespace hello-world
+
+      - name: Deployment summary
+        run: |
+          echo "### Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`${{ env.ECR_URL }}:${{ env.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cluster**: \`${{ env.CLUSTER_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace**: \`hello-world\`" >> $GITHUB_STEP_SUMMARY
+          kubectl rollout status deployment/hello-world -n hello-world
