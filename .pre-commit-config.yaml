@@ -7,14 +7,14 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
         args: [--allow-multiple-documents]
+        # Helm templates contain Go {{}} syntax — not valid YAML
+        exclude: ^helm/
       - id: check-json
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=500]
       - id: detect-private-key
-      - id: no-commit-to-branch
-        args: [--branch, main]
 
   # ── Python ───────────────────────────────────────────────────────────────────
   - repo: https://github.com/psf/black

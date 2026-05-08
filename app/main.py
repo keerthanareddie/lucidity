@@ -2,16 +2,17 @@
 Production-grade Hello World microservice.
 Exposes /health, /ready, /metrics and GET / returning Hello World.
 """
+import logging
 import os
 import time
-import logging
+
 from fastapi import FastAPI, Response
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
