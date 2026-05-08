@@ -1,0 +1,73 @@
+---
+# ServiceMonitor tells Prometheus Operator to scrape our app
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: hello-world
+  namespace: monitoring
+  labels:
+    release: prometheus    # must match Prometheus Operator selector
+spec:
+  namespaceSelector:
+    matchNames:
+      - hello-world
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hello-world
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+---
+# PrometheusRule — SLO-based alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: hello-world-alerts
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: hello-world.slo
+      interval: 30s
+      rules:
+        # SLO: 99.9% of requests succeed
+        - alert: HelloWorldHighErrorRate
+          expr: |
+            rate(hello_world_requests_total{status_code=~"5.."}[5m])
+            / rate(hello_world_requests_total[5m]) > 0.001
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "High error rate on hello-world"
+            description: "Error rate is {{ $value | humanizePercentage }} — SLO breach imminent"
+
+        # SLO: p95 latency < 500ms
+        - alert: HelloWorldHighLatency
+          expr: |
+            histogram_quantile(0.95,
+              rate(hello_world_request_duration_seconds_bucket[5m])
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "High p95 latency on hello-world"
+            description: "p95 latency is {{ $value }}s — threshold is 500ms"
+
+        # Pod availability
+        - alert: HelloWorldPodDown
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="hello-world", deployment="hello-world"
+            } < 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Hello World has no available pods"

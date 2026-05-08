@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello-world-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"    # Grafana sidecar picks this up automatically
+data:
+  hello-world.json: |
+    {
+      "title": "Hello World Service",
+      "uid": "hello-world-svc",
+      "panels": [
+        {
+          "title": "Request Rate (RPS)",
+          "type": "graph",
+          "targets": [{
+            "expr": "rate(hello_world_requests_total[5m])",
+            "legendFormat": "{{method}} {{endpoint}} {{status_code}}"
+          }]
+        },
+        {
+          "title": "P95 Latency",
+          "type": "graph",
+          "targets": [{
+            "expr": "histogram_quantile(0.95, rate(hello_world_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p95 latency"
+          }]
+        },
+        {
+          "title": "Error Rate",
+          "type": "graph",
+          "targets": [{
+            "expr": "rate(hello_world_requests_total{status_code=~'5..'}[5m]) / rate(hello_world_requests_total[5m])",
+            "legendFormat": "error rate"
+          }]
+        },
+        {
+          "title": "Pod CPU Usage",
+          "type": "graph",
+          "targets": [{
+            "expr": "sum(rate(container_cpu_usage_seconds_total{namespace='hello-world'}[5m])) by (pod)",
+            "legendFormat": "{{pod}}"
+          }]
+        },
+        {
+          "title": "Pod Memory Usage",
+          "type": "graph",
+          "targets": [{
+            "expr": "sum(container_memory_working_set_bytes{namespace='hello-world'}) by (pod)",
+            "legendFormat": "{{pod}}"
+          }]
+        }
+      ],
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" }
+    }

@@ -1,0 +1,125 @@
+# ── Hello World Helm Values ───────────────────────────────────────────────────
+
+replicaCount: 2   # 2 replicas for HA even on single node (pending on 1 node is ok for assignment)
+
+image:
+  repository: ""          # Set by CI: <account>.dkr.ecr.<region>.amazonaws.com/hello-world
+  tag: ""                 # Set by CI: git SHA
+  pullPolicy: IfNotPresent
+
+# IRSA — pod assumes this role to pull from ECR
+serviceAccount:
+  create: true
+  name: hello-world
+  annotations:
+    eks.amazonaws.com/role-arn: ""   # Set by CI from Terraform output
+
+# Namespace
+namespace: hello-world
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Canary annotations (used by canary release — overridden in canary values)
+    nginx.ingress.kubernetes.io/canary: "false"
+  hosts:
+    - host: hello-world.example.com    # Replace with your free domain
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: hello-world-tls
+      hosts:
+        - hello-world.YOUR_ALB_IP.nip.io
+
+# Resource limits — always set in production
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Liveness probe — is process alive?
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  failureThreshold: 3
+
+# Readiness probe — ready to serve traffic?
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+
+# Pod disruption budget — at least 1 pod always available
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Security context — run as non-root (matches Dockerfile)
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# Prometheus scraping
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+# Environment variables
+env:
+  APP_VERSION: "1.0.0"
+  ENV: "production"
+  OTLP_ENDPOINT: "http://tempo-distributor.monitoring.svc.cluster.local:4317"
+
+# Topology spread — spread pods across nodes
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app: hello-world
+
+# Canary deployment config
+canary:
+  enabled: false
+  weight: 20        # % of traffic to canary
+  image:
+    tag: ""         # canary image tag

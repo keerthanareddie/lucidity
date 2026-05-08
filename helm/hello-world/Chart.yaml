@@ -1,0 +1,13 @@
+apiVersion: v2
+name: hello-world
+description: Production-grade Hello World microservice Helm chart
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - hello-world
+  - python
+  - fastapi
+maintainers:
+  - name: platform-team
+    email: platform@example.com

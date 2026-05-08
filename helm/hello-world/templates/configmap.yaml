@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hello-world.fullname" . }}-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "hello-world.labels" . | nindent 4 }}
+data:
+  APP_VERSION: {{ .Chart.AppVersion | quote }}
+  ENV: {{ .Values.env.ENV | default "production" | quote }}
