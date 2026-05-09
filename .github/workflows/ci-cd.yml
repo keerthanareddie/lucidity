@@ -324,10 +324,10 @@ jobs:
             --namespace hello-world \
             --set image.repository=${{ steps.resolve.outputs.ecr_url }} \
             --set image.tag=${{ steps.resolve.outputs.image_tag }} \
-            --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="${{ steps.resolve.outputs.irsa_arn }}" \
+            --set-string serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="${{ steps.resolve.outputs.irsa_arn }}" \
             --set replicaCount=1 \
-            --set ingress.annotations."nginx\.ingress\.kubernetes\.io/canary"="true" \
-            --set ingress.annotations."nginx\.ingress\.kubernetes\.io/canary-weight"="20" \
+            --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/canary"="true" \
+            --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/canary-weight"="20" \
             --set canary.enabled=true \
             --set canary.weight=20 \
             --set canary.image.tag=${{ steps.resolve.outputs.image_tag }} \
@@ -375,8 +375,8 @@ jobs:
             --namespace hello-world \
             --set image.repository=${{ steps.resolve.outputs.ecr_url }} \
             --set image.tag=${{ steps.resolve.outputs.image_tag }} \
-            --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="${{ steps.resolve.outputs.irsa_arn }}" \
-            --set ingress.annotations."nginx\.ingress\.kubernetes\.io/canary"="false" \
+            --set-string serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="${{ steps.resolve.outputs.irsa_arn }}" \
+            --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/canary"="false" \
             --wait \
             --timeout 5m
 
