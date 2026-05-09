@@ -145,7 +145,7 @@ resource "aws_security_group_rule" "nodes_internal" {
   type                     = "ingress"
   description              = "Node to node all traffic"
   from_port                = 0
-  to_port                  = 65535
+  to_port                  = 0
   protocol                 = "-1"
   security_group_id        = aws_security_group.nodes.id
   source_security_group_id = aws_security_group.nodes.id
@@ -310,10 +310,37 @@ resource "aws_iam_role_policy_attachment" "node_policies" {
   for_each = toset([
     "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
     "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
-    "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
   ])
   role       = aws_iam_role.nodes.name
   policy_arn = each.value
+}
+
+# ── IRSA: VPC CNI ─────────────────────────────────────────────────────────────
+# Scoped to aws-node service account only — not the whole node role
+resource "aws_iam_role" "vpc_cni" {
+  name = "${var.cluster_name}-vpc-cni"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.eks.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:aws-node"
+          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:aud" = "sts.amazonaws.com"
+        }
+      }
+    }]
+  })
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "vpc_cni" {
+  role       = aws_iam_role.vpc_cni.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 }
 
 # ── Managed Node Group ────────────────────────────────────────────────────────
@@ -348,17 +375,63 @@ resource "aws_eks_node_group" "main" {
   tags       = var.tags
 }
 
+# ── IRSA: EBS CSI Driver ─────────────────────────────────────────────────────
+# Required for the aws-ebs-csi-driver addon to create/attach EBS volumes
+resource "aws_iam_role" "ebs_csi_driver" {
+  name = "${var.cluster_name}-ebs-csi-driver"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.eks.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:aud" = "sts.amazonaws.com"
+        }
+      }
+    }]
+  })
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
+  role       = aws_iam_role.ebs_csi_driver.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
 # ── EKS Add-ons ───────────────────────────────────────────────────────────────
 resource "aws_eks_addon" "addons" {
   for_each = {
-    coredns            = "v1.11.4-eksbuild.2"
-    kube-proxy         = "v1.30.9-eksbuild.3"
-    vpc-cni            = "v1.19.5-eksbuild.1"
-    aws-ebs-csi-driver = "v1.44.0-eksbuild.1"
+    coredns    = "v1.11.4-eksbuild.2"
+    kube-proxy = "v1.30.9-eksbuild.3"
   }
   cluster_name                = aws_eks_cluster.main.name
   addon_name                  = each.key
   addon_version               = each.value
   resolve_conflicts_on_update = "OVERWRITE"
   tags                        = var.tags
+}
+
+resource "aws_eks_addon" "vpc_cni" {
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "vpc-cni"
+  addon_version               = "v1.19.5-eksbuild.1"
+  service_account_role_arn    = aws_iam_role.vpc_cni.arn
+  resolve_conflicts_on_update = "OVERWRITE"
+  tags                        = var.tags
+  depends_on                  = [aws_iam_role_policy_attachment.vpc_cni]
+}
+
+resource "aws_eks_addon" "ebs_csi_driver" {
+  cluster_name                = aws_eks_cluster.main.name
+  addon_name                  = "aws-ebs-csi-driver"
+  addon_version               = "v1.44.0-eksbuild.1"
+  service_account_role_arn    = aws_iam_role.ebs_csi_driver.arn
+  resolve_conflicts_on_update = "OVERWRITE"
+  tags                        = var.tags
+  depends_on                  = [aws_iam_role_policy_attachment.ebs_csi_driver]
 }
