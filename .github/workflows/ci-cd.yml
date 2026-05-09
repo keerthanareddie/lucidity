@@ -3,8 +3,18 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'INTERNAL_NOTES.md'
+      - '.gitignore'
+      - 'docs/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'INTERNAL_NOTES.md'
+      - '.gitignore'
+      - 'docs/**'
   workflow_dispatch:
     inputs:
       force_image_tag:
