@@ -312,6 +312,18 @@ jobs:
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name ${{ env.CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
 
+      - name: Get NLB hostname
+        id: nlb
+        run: |
+          for i in $(seq 1 36); do
+            NLB=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            [ -n "$NLB" ] && break
+            sleep 5
+          done
+          echo "host=${NLB}" >> "$GITHUB_OUTPUT"
+          echo "App will be accessible at: http://${NLB}"
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
@@ -322,10 +334,13 @@ jobs:
         run: |
           helm upgrade --install hello-world-canary helm/hello-world/ \
             --namespace hello-world \
+            --create-namespace \
             --set image.repository=${{ steps.resolve.outputs.ecr_url }} \
             --set image.tag=${{ steps.resolve.outputs.image_tag }} \
+            --set serviceAccount.name=hello-world-canary \
             --set-string serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="${{ steps.resolve.outputs.irsa_arn }}" \
             --set replicaCount=1 \
+            --set "ingress.hosts[0].host=${{ steps.nlb.outputs.host }}" \
             --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/canary"="true" \
             --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/canary-weight"="20" \
             --set canary.enabled=true \
@@ -373,9 +388,11 @@ jobs:
         run: |
           helm upgrade --install hello-world helm/hello-world/ \
             --namespace hello-world \
+            --create-namespace \
             --set image.repository=${{ steps.resolve.outputs.ecr_url }} \
             --set image.tag=${{ steps.resolve.outputs.image_tag }} \
             --set-string serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="${{ steps.resolve.outputs.irsa_arn }}" \
+            --set "ingress.hosts[0].host=${{ steps.nlb.outputs.host }}" \
             --set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/canary"="false" \
             --wait \
             --timeout 5m
@@ -391,4 +408,5 @@ jobs:
           echo "- **Triggered by**: \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Cluster**: \`${{ env.CLUSTER_NAME }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Namespace**: \`hello-world\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **App URL**: \`http://${{ steps.nlb.outputs.host }}\`" >> $GITHUB_STEP_SUMMARY
           kubectl rollout status deployment/hello-world -n hello-world

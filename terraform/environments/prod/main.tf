@@ -126,20 +126,6 @@ module "cluster_autoscaler" {
 }
 
 # ── Secrets Manager ──────────────────────────────────────────────────────────
-import {
-  to = aws_secretsmanager_secret.grafana
-  id = "arn:aws:secretsmanager:ap-south-1:164761934645:secret:hello-world/prod/grafana-2PvWW9"
-}
-
-import {
-  to = aws_secretsmanager_secret.letsencrypt
-  id = "arn:aws:secretsmanager:ap-south-1:164761934645:secret:hello-world/prod/letsencrypt-YJSWwR"
-}
-
-import {
-  to = aws_secretsmanager_secret.app
-  id = "arn:aws:secretsmanager:ap-south-1:164761934645:secret:hello-world/prod/app-VtXtLm"
-}
 # Placeholders created here so ESO can sync on first apply.
 # Real values must be updated manually via AWS console or CLI after creation —
 # never commit real credentials to git.
@@ -191,18 +177,7 @@ resource "aws_secretsmanager_secret_version" "app" {
   }
 }
 
-# ── EKS Addon Imports ─────────────────────────────────────────────────────────
-import {
-  to = module.eks.aws_eks_addon.vpc_cni
-  id = "hello-world-prod:vpc-cni"
-}
-
 # ── ECR Repository ────────────────────────────────────────────────────────────
-import {
-  to = aws_ecr_repository.hello_world
-  id = "hello-world"
-}
-
 resource "aws_ecr_repository" "hello_world" {
   name                 = "hello-world"
   image_tag_mutability = "IMMUTABLE"

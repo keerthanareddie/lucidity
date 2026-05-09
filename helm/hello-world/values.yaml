@@ -26,20 +26,16 @@ ingress:
   enabled: true
   className: nginx
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
     # Canary annotations (used by canary release — overridden in canary values)
     nginx.ingress.kubernetes.io/canary: "false"
   hosts:
-    - host: hello-world.example.com    # Replace with your free domain
+    - host: ""    # Set by CI to the NLB hostname
       paths:
         - path: /
           pathType: Prefix
-  tls:
-    - secretName: hello-world-tls
-      hosts:
-        - hello-world.YOUR_ALB_IP.nip.io
+  tls: []
 
 # Resource limits — always set in production
 resources:
