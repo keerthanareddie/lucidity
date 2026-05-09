@@ -1,168 +1,147 @@
-# Production-Grade EKS Deployment — Hello World
+lets n# Production-Grade EKS Deployment — Hello World
 
-A production-quality deployment of a Python microservice on AWS EKS, built to demonstrate end-to-end DevOps engineering: infrastructure as code, a hardened CI/CD pipeline, canary deployments, and a full observability stack.
+The assignment asked for a Hello World service on Kubernetes with Prometheus and Grafana. What's here is a production-like system: hardened CI/CD pipeline with canary releases and auto-rollback, secrets never touching Git, two layers of autoscaling, distributed tracing, SLO dashboards, and 10 security controls layered from the AWS account down to the container runtime.
 
 ---
 
 ## Live Endpoints
 
-| Service | URL |
-|---------|-----|
-| **Hello World App** | `http://ac5679e0b9ec34c07bb290bd10b7e057-99ce421dcc8d5c5d.elb.ap-south-1.amazonaws.com` |
-| **Grafana** | `http://ac5679e0b9ec34c07bb290bd10b7e057-99ce421dcc8d5c5d.elb.ap-south-1.amazonaws.com/grafana` |
+| Service              | URL |
+|----------------------|-----|
+| **Hello World App**  | `http://ac5679e0b9ec34c07bb290bd10b7e057-99ce421dcc8d5c5d.elb.ap-south-1.amazonaws.com` |
+| **Grafana**          | `http://ac5679e0b9ec34c07bb290bd10b7e057-99ce421dcc8d5c5d.elb.ap-south-1.amazonaws.com/grafana` |
 
-**Grafana credentials:** username `admin` / password `ChangeMe123!`
+**Grafana credentials:** username `admin` / password `mjht5%%gfdda8*ghh`
 
-Both services are routed through the same AWS NLB via NGINX Ingress Controller — no separate load balancer for monitoring.
+Both services share the same AWS NLB via NGINX Ingress — no separate load balancer for monitoring.
+
+> Credentials are managed via AWS Secrets Manager and synced into Kubernetes automatically — they are never stored in Git.
 
 ---
 
-## What Was Built
+## Requirements vs What Was Delivered
 
-### Infrastructure (Terraform)
-- **VPC** — public/private subnets across 2 AZs, single NAT Gateway, VPC Flow Logs to CloudWatch
-- **Network ACLs** — stateless subnet-level defence in depth (TCP + UDP rules for cross-subnet DNS)
-- **EKS Cluster** — Kubernetes 1.30, private node subnets, KMS-encrypted secrets, all control plane logs to CloudWatch
-- **Managed Node Group** — t3.small instances (Free Tier compatible), Cluster Autoscaler scaling 1–5 nodes
-- **EBS CSI Driver** — EKS managed addon for persistent volume support
-- **OIDC Provider** — enables IRSA (IAM Roles for Service Accounts) scoped per service account
-- **ECR Repository** — immutable image tags, scan-on-push, lifecycle policies (keep last 10)
-- **AWS Secrets Manager** — stores Grafana credentials, synced to Kubernetes via External Secrets Operator
+| Assignment Requirement                    | What Was Built |
+|-------------------------------------------|----------------|
+| EKS cluster via Terraform                 | Full VPC, EKS 1.30, node group, KMS encryption, OIDC — modular Terraform |
+| Hello World microservice                  | FastAPI (Python) — `/`, `/health`, `/ready`, `/metrics` |
+| Helm chart                                | Production Helm chart with HPA, PDB, NetworkPolicy, canary support |
+| Prometheus + Grafana                      | Full kube-prometheus-stack + Loki + Tempo + Alertmanager |
+| Deploy the application *(optional)*       | Live on EKS, publicly accessible |
+| CI/CD pipeline *(beyond scope)*           | GitHub Actions — security gates, Trivy scan, canary deploy, auto-rollback |
+| Canary releases *(beyond scope)*          | 20% traffic split via NGINX, health check, promotes or rolls back automatically |
+| Secrets management *(beyond scope)*       | AWS Secrets Manager + External Secrets Operator — nothing in Git |
+| Cluster Autoscaler *(beyond scope)*       | Node-level scaling 1–5 nodes based on pending pods |
+| Distributed tracing *(beyond scope)*      | OpenTelemetry → Tempo, traces visible in Grafana Explore |
+| SLO dashboards + alerts *(beyond scope)*  | Google SRE multi-window burn-rate alerting, error budget tracking |
+| Security hardening *(beyond scope)*       | IRSA, Pod Security Admission, NetworkPolicy, NACLs, read-only FS |
 
-### Application
-- **FastAPI microservice** — `/` returns Hello World JSON, `/health` liveness, `/ready` readiness, `/metrics` Prometheus scrape endpoint
-- **OpenTelemetry** — distributed tracing via OTLP gRPC to Tempo
-- **Prometheus client** — request counter + latency histogram exposed natively
-- **Multi-stage Dockerfile** — non-root user (UID 1001), read-only root filesystem, dropped all Linux capabilities
+---
 
-### Helm Chart
-- **Canary-aware** — single chart supports both canary and stable releases via values overrides
-- **HPA** — horizontal pod autoscaler (CPU + memory, min 1, max 5)
-- **PodDisruptionBudget** — minimum 1 pod always available during node drain
-- **NetworkPolicy** — default deny, explicit allow only for ingress-nginx and Prometheus scraping
-- **Pod Security** — `restricted` policy enforced on the hello-world namespace
-
-### Secrets Management
-
-Secrets never live in Git or environment variables. The flow is:
+## System Architecture
 
 ```
-AWS Secrets Manager  →  External Secrets Operator (ESO)  →  Kubernetes Secret  →  Pod
-```
-
-- **Grafana credentials**, **Let's Encrypt email**, and **app secrets** are stored in AWS Secrets Manager
-- ESO runs with its own IRSA role scoped only to `secretsmanager:GetSecretValue`
-- ESO syncs secrets into Kubernetes on first deploy and refreshes every hour
-- If a secret is rotated in Secrets Manager, Kubernetes picks it up automatically within the refresh window — no pipeline re-run needed
-
-### Horizontal Pod Autoscaler & Cluster Autoscaler
-
-Two levels of autoscaling are configured:
-
-**HPA (pod-level)** — scales the `hello-world` deployment between 1 and 5 replicas based on CPU (>70%) and memory (>80%). Managed by the Kubernetes metrics server.
-
-**Cluster Autoscaler (node-level)** — when pods are pending because nodes are full, CA adds t3.small nodes up to a maximum of 5. When nodes are underutilised, CA removes them. This mirrors how real production clusters handle variable load without over-provisioning.
-
-### Canary Deployment Strategy
-
-Every push to `main` goes through a canary release before reaching 100% of traffic:
-
-```
-New image built and pushed to ECR (tagged with git SHA)
-        │
-        ▼
-Canary release deployed — 20% of traffic routed to new version
-(NGINX Ingress canary weight annotation, not load balancer rules)
-        │
-        ▼
-60-second observation window
-  ├── Pod readiness checked — must be Ready
-  └── Restart count checked — must be ≤ 2 (no crash loops)
-        │
-   ┌────┴────┐
-HEALTHY    UNHEALTHY
-   │            │
-   ▼            ▼
-Promote     Auto-rollback
-stable      (helm uninstall canary)
-100%        Pipeline fails with error
-```
-
-The canary and stable releases are **separate Helm releases** (`hello-world-canary` and `hello-world`), each managing their own Deployment, Service, and Ingress. NGINX routes traffic by weight annotation — no DNS change, no separate load balancer.
-
-### CI/CD Pipeline (GitHub Actions)
-
-```
-Push to main
+GitHub Actions
     │
-    ├─ Security Gates (non-blocking, report only)
-    │   ├── pre-commit hooks
-    │   ├── Gitleaks — secret scanning
-    │   ├── Bandit — Python SAST
-    │   ├── Checkov — Terraform IaC scan
-    │   ├── Helm lint
-    │   └── Hadolint — Dockerfile best practices
-    │
-    ├─ Build & Push
-    │   ├── Docker build (tagged with git SHA)
-    │   ├── Trivy — container vulnerability scan (blocks on CRITICAL/HIGH)
-    │   └── Push to ECR
-    │
-    ├─ Terraform Apply
-    │   └── Provisions/updates all infrastructure
-    │
-    └─ Deploy
-        ├── Canary deploy — 20% traffic
-        ├── 60-second health check — readiness + restart count
-        ├── Auto-rollback if unhealthy
-        └── Promote to stable — 100% traffic, canary removed
+    ├── Security scans (Gitleaks, Bandit, Trivy, Checkov, Hadolint)
+    ├── Docker build → ECR (tagged with git SHA)
+    ├── Terraform apply (infrastructure as code)
+    └── Helm deploy
+          ├── Canary release (20% traffic) → 60s health check
+          │       ├── Healthy → promote to stable (100%)
+          │       └── Unhealthy → auto-rollback, pipeline fails
+          └── Stable release (100% traffic)
+
+AWS Infrastructure
+    ├── VPC (public + private subnets, 2 AZs, NAT Gateway, VPC Flow Logs)
+    ├── EKS 1.30 (private nodes, KMS-encrypted etcd, all logs to CloudWatch)
+    ├── ECR (immutable tags, scan-on-push)
+    └── AWS Secrets Manager (Grafana creds, app secrets)
+
+Kubernetes
+    ├── NGINX Ingress Controller → AWS NLB
+    ├── hello-world namespace
+    │     ├── FastAPI pods (HPA: 1–5 replicas, CPU >70% / memory >80%)
+    │     └── NetworkPolicy (default deny, allow ingress-nginx + Prometheus only)
+    └── monitoring namespace
+          ├── Prometheus (scrapes app every 15s via ServiceMonitor)
+          ├── Grafana (SLO dashboard, cluster dashboard, logs, traces)
+          ├── Loki + Promtail (log aggregation from all pods)
+          ├── Tempo (distributed traces via OTLP gRPC)
+          └── Alertmanager (multi-window burn-rate alerts)
 ```
 
-AWS authentication uses **OIDC** — no long-lived access keys stored in GitHub secrets. Each job assumes an IAM role via `sts:AssumeRoleWithWebIdentity` using a short-lived token scoped to that workflow run.
+---
 
-### Observability Stack
+## Standout Design Decisions
 
-All deployed in the `monitoring` namespace via Helm, accessible through Grafana:
+### 1. No AWS keys anywhere in the pipeline
 
-| Tool | Purpose |
-|------|---------|
-| **Prometheus** | Scrapes app metrics every 15s via ServiceMonitor |
-| **Grafana** | Dashboards for SLOs, Kubernetes cluster health, logs, traces |
-| **Loki + Promtail** | Log aggregation — Promtail DaemonSet ships all pod logs |
-| **Tempo** | Distributed tracing — app sends traces via OTLP gRPC |
-| **Alertmanager** | Multi-window burn-rate alerts (Tier 1 critical, Tier 2 warning, Tier 3 info) |
+GitHub Actions authenticates to AWS via **OIDC** (`sts:AssumeRoleWithWebIdentity`). Each workflow run gets a short-lived token scoped to that run. There are no `AWS_ACCESS_KEY_ID` secrets in GitHub at all — if the repo is compromised, there are no static credentials to steal.
 
-**Pre-built Grafana dashboards:**
-- SLO dashboard — request rate, p95/p99 latency, error rate, error budget burn
-- Kubernetes cluster — node CPU/memory, pod count, HPA status
-- SLO-based alerts — Google SRE model multi-window burn rate (14.4x, 6x, 3x)
+### 2. Secrets flow — nothing in Git, nothing in env vars
 
-**PrometheusRules configured:**
-- Recording rules for 5m/30m/1h/6h/24h request and error rates
-- Error budget tracking against 99.9% SLO target
-- Latency p50/p95/p99 recording rules for fast dashboard loading
+```
+AWS Secrets Manager → External Secrets Operator → Kubernetes Secret → Pod
+```
 
-### Security
+ESO runs with its own IRSA role scoped to `secretsmanager:GetSecretValue` only. Rotating a secret in Secrets Manager is picked up within 1 hour with no pipeline re-run. Each service account (ESO, Cluster Autoscaler, hello-world app) has its own scoped IAM role — no shared credentials.
 
-| Control | Implementation |
-|---------|---------------|
-| No long-lived AWS keys | GitHub OIDC → `sts:AssumeRoleWithWebIdentity` |
-| Pod-scoped AWS access | IRSA — each service account has its own IAM role |
-| Secrets not in Git | AWS Secrets Manager + External Secrets Operator |
-| KMS encryption | EKS etcd secrets encrypted at rest |
-| Private node subnets | Nodes have no public IPs |
-| Pod Security Admission | `restricted` for app, `privileged` for monitoring (node-exporter) |
-| Read-only container FS | Prevents runtime file tampering |
-| Network segmentation | NetworkPolicy default-deny per namespace |
-| NACLs | Subnet-level stateless firewall |
-| Supply chain | Trivy scans every image before it reaches the cluster |
+### 3. Canary deploy with automatic rollback
+
+Every push to `main` deploys to 20% of traffic first. After a 60-second observation window, the pipeline checks pod readiness and restart count. If either check fails, the canary Helm release is uninstalled and the pipeline fails — the stable release continues serving 100% of traffic untouched.
+
+```
+Build → Canary (20%) → Health check → Promote stable (100%) → Remove canary
+                              │
+                         Unhealthy → Rollback + fail pipeline
+```
+
+In a real production system this would use **ArgoCD Rollouts** or **Harness** with automated Prometheus metric analysis per traffic step instead of a fixed time window.
+
+### 4. Two layers of autoscaling
+
+- **HPA** — pod-level, scales `hello-world` 1–5 replicas on CPU >70% or memory >80%
+- **Cluster Autoscaler** — node-level, adds/removes EC2 nodes when pods are pending or underutilised
+
+For a greenfield production cluster **Karpenter** is the better choice — it provisions EC2 directly via the Fleet API (seconds vs minutes), supports heterogeneous instance types, and handles spot interruptions natively.
+
+### 5. Observability beyond Prometheus + Grafana
+
+| Signal  | Tool             | How |
+|---------|------------------|-----|
+| Metrics | Prometheus       | ServiceMonitor scrapes `/metrics` every 15s |
+| Logs    | Loki + Promtail  | Promtail DaemonSet ships all pod logs |
+| Traces  | Tempo            | App sends traces via OTLP gRPC on startup |
+| Alerts  | Alertmanager     | Google SRE multi-window burn-rate (14.4×, 6×, 3×) |
+
+Recording rules pre-compute 5m/30m/1h/6h/24h rates so dashboards load instantly. Error budget is tracked against a 99.9% SLO target.
+
+### 6. Security layered from AWS account to container runtime
+
+| Layer         | Control |
+|---------------|---------|
+| AWS account   | OIDC auth, no static keys |
+| IAM           | IRSA — one role per service account, least-privilege |
+| Secrets       | AWS Secrets Manager + ESO — nothing in Git |
+| Network (AWS) | Private node subnets, NACLs (stateless, TCP + UDP) |
+| Network (K8s) | NetworkPolicy default-deny per namespace |
+| etcd          | KMS-encrypted at rest |
+| Pod           | Security Admission `restricted`, non-root UID 1001, read-only FS, all Linux capabilities dropped |
+| Image         | Trivy blocks on CRITICAL/HIGH before any push to ECR |
+
+### 7. TLS infrastructure is in place
+
+**cert-manager** is deployed as a Kubernetes operator with `ClusterIssuer` resources configured for Let's Encrypt. It automates the full certificate lifecycle — ACME HTTP-01 challenge, stores the cert as a Kubernetes Secret, auto-renews 30 days before expiry. The only gap is a custom domain: AWS NLB hostnames (`.elb.amazonaws.com`) are not eligible for public certificates. Adding a domain + CNAME to the NLB + one annotation on the Ingress is all that's needed to enable HTTPS end-to-end.
 
 ---
 
 ## Accessing the Application
 
+> The application is served over HTTP. If your browser shows a security warning when opening the URLs below, click **Advanced** → **Proceed to site**.
+
 **App:**
-```
+```bash
 curl http://ac5679e0b9ec34c07bb290bd10b7e057-99ce421dcc8d5c5d.elb.ap-south-1.amazonaws.com/
 ```
 Returns:
@@ -172,10 +151,11 @@ Returns:
 
 **Grafana:**
 1. Open `http://ac5679e0b9ec34c07bb290bd10b7e057-99ce421dcc8d5c5d.elb.ap-south-1.amazonaws.com/grafana`
-2. Login: `admin` / `ChangeMe123!`
-3. Go to **Dashboards → Browse** to see pre-built SLO and cluster dashboards
-4. Go to **Explore → Prometheus** and run `hello_world_requests_total` for live app metrics
-5. Go to **Explore → Loki** and run `{namespace="hello-world"}` for app logs
+2. Login: `admin` / `mjht5%%gfdda8*ghh`
+3. **Dashboards → Browse** — SLO dashboard and Kubernetes cluster dashboard
+4. **Explore → Prometheus** → run `hello_world_requests_total` for live request metrics
+5. **Explore → Loki** → run `{namespace="hello-world"}` for app logs
+6. **Explore → Tempo** → search by trace ID for distributed traces
 
 ---
 
@@ -184,11 +164,11 @@ Returns:
 ```
 .
 ├── app/                        # FastAPI microservice
-│   ├── main.py                 # App with metrics, tracing, health endpoints
+│   ├── main.py                 # Metrics, tracing, health endpoints
 │   ├── Dockerfile              # Multi-stage, non-root, hardened
 │   └── requirements.txt
 ├── terraform/
-│   ├── bootstrap/              # S3 + DynamoDB for Terraform state
+│   ├── bootstrap/              # S3 + DynamoDB for Terraform remote state
 │   ├── modules/
 │   │   ├── vpc/                # VPC, subnets, NACLs, flow logs
 │   │   ├── eks/                # Cluster, node group, addons, OIDC
@@ -196,54 +176,32 @@ Returns:
 │   │   ├── external-secrets/   # ESO Helm + IRSA
 │   │   └── cluster-autoscaler/ # CA Helm + IRSA
 │   └── environments/prod/      # Root module — wires everything together
-├── helm/hello-world/           # Helm chart (app + canary support)
+├── helm/hello-world/           # Helm chart (canary + stable via values overrides)
 ├── monitoring/
 │   ├── external-secrets.yaml   # ESO ExternalSecret manifests
-│   ├── prometheus/             # ServiceMonitor, PrometheusRules, dashboards
-│   └── grafana/                # Pre-built Grafana dashboard ConfigMaps
+│   ├── prometheus/             # ServiceMonitor, PrometheusRules
+│   └── grafana/                # Pre-built dashboard ConfigMaps
 ├── .github/workflows/
-│   └── ci-cd.yml               # Full CI/CD pipeline
+│   └── ci-cd.yml               # Full CI/CD pipeline (security → build → infra → deploy)
 └── scripts/
-    └── bootstrap.sh            # One-time state backend setup
+    └── bootstrap.sh            # One-time Terraform state backend setup
 ```
 
 ---
 
-## Known Limitations & What Would Be Added in Production
+## What Would Be Added in Production
 
-### HTTPS / TLS
-Currently serving over **HTTP only**. The infrastructure for TLS is in place (cert-manager is deployed, ClusterIssuers are configured) but requires a custom domain to complete the Let's Encrypt HTTP-01 challenge. AWS NLB hostnames (`.elb.amazonaws.com`) are not eligible for certificates.
+### Multi-environment promotion
+Single `prod` environment currently. Production would be `dev → staging → prod`, each with its own Terraform state backend and environment-specific variable files. Promotion to staging/prod would require explicit approval gates in GitHub Actions.
 
-**Production fix:** Register a domain (or use Route 53 with an existing one), point it to the NLB, and cert-manager handles certificate issuance and renewal automatically.
+### PR-based deployment
+Currently deploys on push to `main`. In production: feature branch → PR triggers `terraform plan` + security scans as checks → merge to `dev` → auto-promote through environments with approval gates.
 
-### Multi-Environment Pipeline
-Currently there is a **single `prod` environment**. A production-grade setup would have:
-- `dev` → auto-deploy on every PR merge
-- `staging` → deployed after dev passes integration tests
-- `prod` → requires manual approval gate after staging is healthy for N minutes
+### Advanced canary (ArgoCD Rollouts or Harness)
+Current canary uses a fixed 60-second health window. Production would use **ArgoCD Rollouts** with `AnalysisTemplate` querying Prometheus directly — each traffic step (5% → 20% → 50% → 100%) is gated by actual error rate and p99 latency thresholds, not a timer. The Prometheus recording rules in this repo are already written in the format ArgoCD expects — no metric changes needed.
 
-This would use Terraform workspaces or separate state backends per environment, with environment-specific variable files.
+### Alertmanager notification receivers
+Alertmanager routing rules and severity tiers are configured but notification receivers (Slack, PagerDuty) are commented out as no webhook/key is available. In production these would be populated from Secrets Manager via ESO.
 
-### PR-Based Deployment Strategy
-Currently deploys on push to `main`. In production this would be:
-- Feature branch → PR opened → runs security scans and `terraform plan` as a PR check
-- PR approved + merged → deploys to dev automatically
-- Promotion to staging/prod requires explicit approval in GitHub Actions
-
-### Advanced Canary with ArgoCD Rollouts or Harness
-The current canary implementation uses NGINX weight annotations and a 60-second manual health window. In real production this would be replaced with **ArgoCD Rollouts** or **Harness**, which offer:
-- Automated analysis against Prometheus metrics (error rate, p99 latency) before each traffic step — no fixed time window
-- Progressive traffic steps: 5% → 20% → 50% → 100%, each gated by metric thresholds
-- Automatic rollback triggered by SLO breach, not just pod restarts
-- Full audit trail and approval gates per environment
-
-The Prometheus recording rules and ServiceMonitor already in this repo are ready to plug into an ArgoCD `AnalysisTemplate` — the metric queries don't need to change.
-
-### Persistent Grafana Configuration
-Grafana datasources and dashboard provisioning are handled by ConfigMaps and the kube-prometheus-stack sidecar. Some configuration (datasource URLs) required a manual fix post-deploy due to a first-boot race condition in the Prometheus operator. In production this would be handled by a proper Grafana provisioning ConfigMap update in the Helm values.
-
-### Alertmanager Notifications
-AlertManager is configured with routing rules and severity tiers but the notification receivers are commented out (no Slack webhook or PagerDuty key). In production, these would be populated from Secrets Manager via ESO.
-
-### Single NAT Gateway
-Using one NAT Gateway across both AZs to minimise cost. In production, each AZ would have its own NAT Gateway to eliminate cross-AZ traffic and remove the single point of failure for outbound internet access.
+### Per-AZ NAT Gateways
+Single NAT Gateway used across both AZs to minimise cost. Production would have one per AZ to eliminate cross-AZ traffic charges and remove the single point of outbound failure.
