@@ -249,7 +249,7 @@ resource "kubernetes_namespace" "namespaces" {
     labels = {
       environment = var.environment
       managed-by  = "terraform"
-      "pod-security.kubernetes.io/enforce"         = each.key == "hello-world" ? "restricted" : "baseline"
+      "pod-security.kubernetes.io/enforce"         = each.key == "hello-world" ? "restricted" : (each.key == "monitoring" ? "privileged" : "baseline")
       "pod-security.kubernetes.io/enforce-version" = "latest"
     }
   }
