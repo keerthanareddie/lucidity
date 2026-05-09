@@ -40,11 +40,11 @@ ingress:
 # Resource limits — always set in production
 resources:
   requests:
-    cpu: "25m"
-    memory: "48Mi"
-  limits:
-    cpu: "100m"
+    cpu: "50m"
     memory: "128Mi"
+  limits:
+    cpu: "200m"
+    memory: "384Mi"
 
 # Horizontal Pod Autoscaler
 autoscaling:
