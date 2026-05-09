@@ -30,7 +30,7 @@ variable "kubernetes_version" {
 
 variable "node_instance_type" {
   type    = string
-  default = "t3.medium"
+  default = "t3.small"
 }
 
 variable "node_desired_size" {
@@ -45,5 +45,5 @@ variable "node_min_size" {
 
 variable "node_max_size" {
   type    = number
-  default = 3
+  default = 5
 }
