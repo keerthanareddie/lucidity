@@ -382,7 +382,7 @@ jobs:
 
       # ── Remove canary ────────────────────────────────────────────────────────
       - name: Remove canary release
-        run: helm uninstall hello-world-canary --namespace hello-world
+        run: helm uninstall hello-world-canary --namespace hello-world || true
 
       - name: Deployment summary
         run: |

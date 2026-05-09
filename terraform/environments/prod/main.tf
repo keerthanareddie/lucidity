@@ -126,6 +126,20 @@ module "cluster_autoscaler" {
 }
 
 # ── Secrets Manager ──────────────────────────────────────────────────────────
+import {
+  to = aws_secretsmanager_secret.grafana
+  id = "arn:aws:secretsmanager:ap-south-1:164761934645:secret:hello-world/prod/grafana-2PvWW9"
+}
+
+import {
+  to = aws_secretsmanager_secret.letsencrypt
+  id = "arn:aws:secretsmanager:ap-south-1:164761934645:secret:hello-world/prod/letsencrypt-YJSWwR"
+}
+
+import {
+  to = aws_secretsmanager_secret.app
+  id = "arn:aws:secretsmanager:ap-south-1:164761934645:secret:hello-world/prod/app-VtXtLm"
+}
 # Placeholders created here so ESO can sync on first apply.
 # Real values must be updated manually via AWS console or CLI after creation —
 # never commit real credentials to git.
@@ -175,6 +189,12 @@ resource "aws_secretsmanager_secret_version" "app" {
   lifecycle {
     ignore_changes = [secret_string]
   }
+}
+
+# ── EKS Addon Imports ─────────────────────────────────────────────────────────
+import {
+  to = module.eks.aws_eks_addon.vpc_cni
+  id = "hello-world-prod:vpc-cni"
 }
 
 # ── ECR Repository ────────────────────────────────────────────────────────────
@@ -279,8 +299,6 @@ resource "helm_release" "ingress_nginx" {
 }
 
 # ── Prometheus + Grafana ──────────────────────────────────────────────────────
-# Grafana reads password from K8s secret — synced by ESO from Secrets Manager
-# NO plaintext credentials anywhere in Terraform or GitHub
 resource "helm_release" "prometheus_stack" {
   name       = "prometheus"
   repository = "https://prometheus-community.github.io/helm-charts"
@@ -421,11 +439,32 @@ resource "null_resource" "apply_external_secrets" {
       kubectl wait --for=condition=established crd/externalsecrets.external-secrets.io --timeout=120s
       kubectl wait --for=condition=established crd/clustersecretstores.external-secrets.io --timeout=120s
 
-      # Apply ClusterSecretStore + ExternalSecrets
+      # Create ClusterSecretStore pointing to AWS Secrets Manager
+      cat <<YAML | kubectl apply -f -
+apiVersion: external-secrets.io/v1beta1
+kind: ClusterSecretStore
+metadata:
+  name: aws-secrets-manager
+spec:
+  provider:
+    aws:
+      service: SecretsManager
+      region: ${var.aws_region}
+      auth:
+        jwt:
+          serviceAccountRef:
+            name: external-secrets
+            namespace: external-secrets
+YAML
+
+      # Apply ExternalSecrets (Grafana, Let's Encrypt, app)
       kubectl apply -f ${path.module}/../../../monitoring/external-secrets.yaml
 
-      # Wait up to 60s for grafana-admin-credentials secret to sync
-      kubectl wait secret/grafana-admin-credentials -n monitoring --for=jsonpath='{.metadata.name}'=grafana-admin-credentials --timeout=60s || true
+      # Wait for grafana-admin-credentials to sync (up to 90s)
+      for i in $(seq 1 18); do
+        kubectl get secret grafana-admin-credentials -n monitoring 2>/dev/null && break
+        sleep 5
+      done
     EOF
   }
   depends_on = [module.external_secrets, kubernetes_namespace.namespaces]
