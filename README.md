@@ -42,6 +42,54 @@ Both services are routed through the same AWS NLB via NGINX Ingress Controller �
 - **NetworkPolicy** — default deny, explicit allow only for ingress-nginx and Prometheus scraping
 - **Pod Security** — `restricted` policy enforced on the hello-world namespace
 
+### Secrets Management
+
+Secrets never live in Git or environment variables. The flow is:
+
+```
+AWS Secrets Manager  →  External Secrets Operator (ESO)  →  Kubernetes Secret  →  Pod
+```
+
+- **Grafana credentials**, **Let's Encrypt email**, and **app secrets** are stored in AWS Secrets Manager
+- ESO runs with its own IRSA role scoped only to `secretsmanager:GetSecretValue`
+- ESO syncs secrets into Kubernetes on first deploy and refreshes every hour
+- If a secret is rotated in Secrets Manager, Kubernetes picks it up automatically within the refresh window — no pipeline re-run needed
+
+### Horizontal Pod Autoscaler & Cluster Autoscaler
+
+Two levels of autoscaling are configured:
+
+**HPA (pod-level)** — scales the `hello-world` deployment between 1 and 5 replicas based on CPU (>70%) and memory (>80%). Managed by the Kubernetes metrics server.
+
+**Cluster Autoscaler (node-level)** — when pods are pending because nodes are full, CA adds t3.small nodes up to a maximum of 5. When nodes are underutilised, CA removes them. This mirrors how real production clusters handle variable load without over-provisioning.
+
+### Canary Deployment Strategy
+
+Every push to `main` goes through a canary release before reaching 100% of traffic:
+
+```
+New image built and pushed to ECR (tagged with git SHA)
+        │
+        ▼
+Canary release deployed — 20% of traffic routed to new version
+(NGINX Ingress canary weight annotation, not load balancer rules)
+        │
+        ▼
+60-second observation window
+  ├── Pod readiness checked — must be Ready
+  └── Restart count checked — must be ≤ 2 (no crash loops)
+        │
+   ┌────┴────┐
+HEALTHY    UNHEALTHY
+   │            │
+   ▼            ▼
+Promote     Auto-rollback
+stable      (helm uninstall canary)
+100%        Pipeline fails with error
+```
+
+The canary and stable releases are **separate Helm releases** (`hello-world-canary` and `hello-world`), each managing their own Deployment, Service, and Ingress. NGINX routes traffic by weight annotation — no DNS change, no separate load balancer.
+
 ### CI/CD Pipeline (GitHub Actions)
 
 ```
@@ -64,13 +112,13 @@ Push to main
     │   └── Provisions/updates all infrastructure
     │
     └─ Deploy
-        ├── Canary deploy — 20% traffic via NGINX canary weight annotation
-        ├── 60-second health window — checks pod readiness + restart count
-        ├── Auto-rollback if canary fails
-        └── Promote to stable — 100% traffic, remove canary
+        ├── Canary deploy — 20% traffic
+        ├── 60-second health check — readiness + restart count
+        ├── Auto-rollback if unhealthy
+        └── Promote to stable — 100% traffic, canary removed
 ```
 
-AWS authentication uses **OIDC** — no long-lived access keys stored in GitHub secrets.
+AWS authentication uses **OIDC** — no long-lived access keys stored in GitHub secrets. Each job assumes an IAM role via `sts:AssumeRoleWithWebIdentity` using a short-lived token scoped to that workflow run.
 
 ### Observability Stack
 
@@ -181,6 +229,15 @@ Currently deploys on push to `main`. In production this would be:
 - Feature branch → PR opened → runs security scans and `terraform plan` as a PR check
 - PR approved + merged → deploys to dev automatically
 - Promotion to staging/prod requires explicit approval in GitHub Actions
+
+### Advanced Canary with ArgoCD Rollouts or Harness
+The current canary implementation uses NGINX weight annotations and a 60-second manual health window. In real production this would be replaced with **ArgoCD Rollouts** or **Harness**, which offer:
+- Automated analysis against Prometheus metrics (error rate, p99 latency) before each traffic step — no fixed time window
+- Progressive traffic steps: 5% → 20% → 50% → 100%, each gated by metric thresholds
+- Automatic rollback triggered by SLO breach, not just pod restarts
+- Full audit trail and approval gates per environment
+
+The Prometheus recording rules and ServiceMonitor already in this repo are ready to plug into an ArgoCD `AnalysisTemplate` — the metric queries don't need to change.
 
 ### Persistent Grafana Configuration
 Grafana datasources and dashboard provisioning are handled by ConfigMaps and the kube-prometheus-stack sidecar. Some configuration (datasource URLs) required a manual fix post-deploy due to a first-boot race condition in the Prometheus operator. In production this would be handled by a proper Grafana provisioning ConfigMap update in the Helm values.
