@@ -165,7 +165,7 @@ resource "aws_network_acl" "private" {
   vpc_id     = aws_vpc.main.id
   subnet_ids = aws_subnet.private[*].id
 
-  # Inbound from VPC CIDR only
+  # Inbound from VPC CIDR — TCP (pod-to-pod, kubelet, etc.)
   ingress {
     rule_no    = 100
     protocol   = "tcp"
@@ -174,10 +174,28 @@ resource "aws_network_acl" "private" {
     from_port  = 0
     to_port    = 65535
   }
-  # Ephemeral return traffic from internet (for outbound calls via NAT)
+  # Inbound from VPC CIDR — UDP (DNS port 53 between pods on different nodes)
+  ingress {
+    rule_no    = 105
+    protocol   = "udp"
+    action     = "allow"
+    cidr_block = var.vpc_cidr
+    from_port  = 0
+    to_port    = 65535
+  }
+  # Ephemeral return TCP traffic from internet (for outbound calls via NAT)
   ingress {
     rule_no    = 110
     protocol   = "tcp"
+    action     = "allow"
+    cidr_block = "0.0.0.0/0"
+    from_port  = 1024
+    to_port    = 65535
+  }
+  # Ephemeral return UDP traffic from internet (e.g. NTP, QUIC)
+  ingress {
+    rule_no    = 115
+    protocol   = "udp"
     action     = "allow"
     cidr_block = "0.0.0.0/0"
     from_port  = 1024
