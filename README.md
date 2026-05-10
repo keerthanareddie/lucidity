@@ -1,4 +1,4 @@
-lets n# Production-Grade EKS Deployment — Hello World
+# Production-Grade EKS Deployment — Hello World
 
 The assignment asked for a Hello World service on Kubernetes with Prometheus and Grafana. What's here is a production-like system: hardened CI/CD pipeline with canary releases and auto-rollback, secrets never touching Git, two layers of autoscaling, distributed tracing, SLO dashboards, and 10 security controls layered from the AWS account down to the container runtime.
 
